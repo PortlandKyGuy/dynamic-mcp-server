@@ -139,6 +139,7 @@ describe('parseCliArgs', () => {
   it('should exit with an error if no config file path is provided', () => {
     parseCliArgs();
     expect(process.exit).toHaveBeenCalledWith(1);
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Usage: dynamic-mcp-server --config'));
     expect(console.error).toHaveBeenCalledWith('Error: a path to a config file must be provided with --config.');
   });
 
