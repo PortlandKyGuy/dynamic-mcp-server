@@ -16,8 +16,8 @@
     "ai",
     "tools"
   ],
-  "author": "",
-  "license": "ISC",
+  "author": "Kyle Aaron",
+  "license": "MIT",
   "preferGlobal": true,
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.25.1",
