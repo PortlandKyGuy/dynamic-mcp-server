@@ -1,0 +1,13 @@
+{
+  "name": "Test Server",
+  "version": "1.0.0",
+  "model": "gemini",
+  "tools": [
+    {
+      "name": "test",
+      "description": "A test tool",
+      "command": "echo",
+      "args": ["hello"]
+    }
+  ]
+}

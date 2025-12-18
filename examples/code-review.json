@@ -1,0 +1,39 @@
+{
+  "name": "code-review-mcp-server",
+  "model": "gemini",
+  "modelId": "gemini-2.5-flash",
+  "tools": [
+    {
+      "name": "review-code",
+      "description": "Perform a comprehensive code review on the specified files or directory. Returns detailed feedback on code quality, potential bugs, and improvement suggestions.",
+      "prompt": "You are an expert code reviewer. Review the code at {{target}}. Focus on: {{focusAreas}}",
+      "inputs": [
+        {
+          "name": "target",
+          "type": "string",
+          "description": "The file path, directory, or glob pattern to review",
+          "required": true
+        },
+        {
+          "name": "focusAreas",
+          "type": "string",
+          "description": "Specific areas to focus on (e.g., 'security, performance, readability')",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "suggest-tests",
+      "description": "Analyze code and suggest test cases that should be written to ensure good coverage.",
+      "prompt": "Analyze the code at {{target}} and suggest comprehensive test cases.\n\nConsider:\n1. Unit tests for individual functions\n2. Edge cases and boundary conditions\n3. Error handling scenarios\n4. Integration test opportunities\n\nProvide specific test case descriptions with expected inputs and outputs.",
+      "inputs": [
+        {
+          "name": "target",
+          "type": "string",
+          "description": "The file or directory to analyze for test suggestions",
+          "required": true
+        }
+      ]
+    }
+  ]
+}
