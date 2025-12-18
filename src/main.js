@@ -103,6 +103,7 @@ function parseCliArgs() {
   }
 
   if (!configPath) {
+    console.error("Usage: dynamic-mcp-server --config <path> [--prompt <string|file>] [--async] [--handshake-and-exit]");
     console.error("Error: a path to a config file must be provided with --config.");
     process.exit(1);
   }

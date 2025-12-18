@@ -122,7 +122,7 @@ First, install the `dynamic-mcp-server` globally:
 npm install -g .
 ```
 
-This makes the `dynamic-mcp-server` command available on your PATH. In your MCP client configs (Claude, Codex, Gemini), set the server command to `dynamic-mcp-server` and pass your JSON config path as the first argument (plus any flags like `--async` or `--prompt`).
+This makes the `dynamic-mcp-server` command available on your PATH. In your MCP client configs (Claude, Codex, Gemini), set the server command to `dynamic-mcp-server` and pass your JSON config path with the `--config` flag (plus any flags like `--async` or `--prompt`).
 
 ### MCP Client Configuration
 
@@ -132,8 +132,8 @@ MCP Clients are your Codex, Claude, Gemini CLIs. These settings tell your CLI wh
 
 | Option | Description |
 |--------|-------------|
-| `<config-file-path>` | Path to the JSON configuration file (required) |
-| `--prompt`, `-p` | A prompt string or path to a prompt file. If provided, this prompt is prepended to every task with a newline separator. If the value is a valid file path, its contents are used. |
+| `--config <path>` | Path to the JSON configuration file (required) |
+| `--prompt`, `-p <value>` | A prompt string or path to a prompt file. If provided, this prompt is prepended to every task with a newline separator. If the value is a valid file path, its contents are used. |
 
 ### Prompt Prefix
 
@@ -146,12 +146,12 @@ The `--prompt` option allows you to prepend a system prompt to every task. This 
 
 **Using a prompt file:**
 ```bash
-dynamic-mcp-server config.json --prompt /path/to/system-prompt.txt
+dynamic-mcp-server --config /path/to/config.json --prompt /path/to/system-prompt.txt
 ```
 
 **Using a literal string:**
 ```bash
-dynamic-mcp-server config.json --prompt "Always respond in JSON format"
+dynamic-mcp-server --config /path/to/config.json --prompt "Always respond in JSON format"
 ```
 
 **Example prompt file** (`examples/code-review-prompt.txt`):
@@ -223,7 +223,7 @@ Some MCP clients have tool execution timeouts. For long-running tasks, you can e
 
 **Starting with async mode:**
 ```bash
-dynamic-mcp-server config.json --async
+dynamic-mcp-server --config /path/to/config.json --async
 ```
 
 When `--async` is used, the server will start the long-running task in the background and poll for its completion internally. This makes the asynchronous nature of the task transparent to the client. The client makes a single request and gets a single response, even though the server is doing a lot of work in the background.
@@ -238,7 +238,7 @@ For the dynamic MCP server with a custom config:
   "mcpServers": {
     "architecture-reviewer": {
       "command": "dynamic-mcp-server",
-      "args": ["/path/to/dynamic-mcp-server-config-for-architecture-reviewer.json", "--async"],
+      "args": ["--config", "/path/to/dynamic-mcp-server-config-for-architecture-reviewer.json", "--async"],
       "timeout": 120
     }
   }
@@ -251,7 +251,7 @@ With a prompt prefix (string or file path):
   "mcpServers": {
     "tech-manager": {
       "command":"dynamic-mcp-server",
-      "args": ["/path/to/dynamic-mcp-server-config-for-tech-manager.json", "--prompt", "/path/to/system-prompt.txt", "--async"],
+      "args": ["--config", "/path/to/dynamic-mcp-server-config-for-tech-manager.json", "--prompt", "/path/to/system-prompt.txt", "--async"],
       "timeout": 120
     }
   }
@@ -270,7 +270,7 @@ For the dynamic MCP server:
 ```toml
 [mcp_servers.architect-reviewer]
 command = "dynamic-mcp-server"
-args = ["/path/to/dynamic-mcp-server-config-for-architecture-reviewer"]
+args = ["--config", "/path/to/dynamic-mcp-server-config-for-architecture-reviewer"]
 startup_timeout_sec = 60
 tool_timeout_sec = 2400
 ```
@@ -279,7 +279,7 @@ With a prompt prefix:
 ```toml
 [mcp_servers.tech-manager]
 command = "dynamic-mcp-server"
-args = ["/path/to/dynamic-mcp-server-config-for-tech-manager.json", "--prompt", "/path/to/system-prompt.txt"]
+args = ["--config", "/path/to/dynamic-mcp-server-config-for-tech-manager.json", "--prompt", "/path/to/system-prompt.txt"]
 startup_timeout_sec = 60
 tool_timeout_sec = 2400
 ```
@@ -296,7 +296,7 @@ For the dynamic MCP server:
   "mcp-servers": {
     "architect-reviewer": {
       "command": "dynamic-mcp-server",
-      "args": ["/path/to/dynamic-mcp-server-config-for-architecture-reviewer.json", "--async"]
+      "args": ["--config", "/path/to/dynamic-mcp-server-config-for-architecture-reviewer.json", "--async"]
     }
   }
 }
@@ -308,7 +308,7 @@ With a prompt prefix (string or file path):
   "mcp-servers": {
     "tech-manager": {
       "command":"dynamic-mcp-server",
-      "args": ["/path/to/dynamic-mcp-server-config-for-tech-manager.json", "--prompt", "/path/to/system-prompt.txt", "--async"]
+      "args": ["--config", "/path/to/dynamic-mcp-server-config-for-tech-manager.json", "--prompt", "/path/to/system-prompt.txt", "--async"]
     }
   }
 }
