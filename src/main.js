@@ -545,33 +545,18 @@ if (require.main === module) {
 
 
 if (process.env.NODE_ENV === 'test') {
-
   module.exports = {
-
     parseCliArgs,
-
     loadConfig,
-
     loadPromptPrefix,
-
     substitutePromptVariables,
-
     buildTaskPrompt,
-
     resolveToolAsyncFlag,
-
     executeTask,
-
     startTaskAsync,
-
     createHandshakeSummary,
-
     registerConfiguredTools,
-
     resolveJobTimeoutMs,
-
     jobs
-
   };
-
 }
