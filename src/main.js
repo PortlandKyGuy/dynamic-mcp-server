@@ -51,6 +51,7 @@ const ConfigSchemas = {
     args: z.array(z.any()).optional(),
     prompt: z.string().optional(),
     promptFile: z.string().optional(),
+    async: z.boolean().optional(),
     inputs: z.array(z.lazy(() => ConfigSchemas.ConfigInput)).optional().default([]),
   }),
   Config: z.object({
@@ -205,6 +206,20 @@ function buildTaskPrompt(tool, toolPromptTemplate, toolParams, promptPrefix) {
     task = firstStringInput ? String(toolParams[firstStringInput.name] ?? "") : JSON.stringify(toolParams);
   }
   return promptPrefix ? `${promptPrefix}\n${task}` : task;
+}
+
+/**
+ * Resolves whether a tool should run asynchronously.
+ * Tool-level async setting overrides the server default.
+ * @param {object} tool - The tool definition.
+ * @param {boolean} serverAsync - Default async flag for the server.
+ * @returns {boolean}
+ */
+function resolveToolAsyncFlag(tool, serverAsync) {
+  if (typeof tool.async === "boolean") {
+    return tool.async;
+  }
+  return serverAsync;
 }
 
 /**
@@ -380,26 +395,16 @@ function createHandshakeSummary(config, serverName) {
   };
 }
 
-/**
- * The main function to set up and start the MCP server.
- */
-async function main() {
-  const { configPath, promptArg, asyncArg, handshakeAndExitArg } = parseCliArgs();
-  const validatedConfig = loadConfig(configPath);
-  const promptPrefix = loadPromptPrefix(promptArg);
+function registerConfiguredTools(server, config, promptPrefix, serverAsync) {
+  let hasAsyncTools = false;
 
-  const serverName = validatedConfig.name || basename(configPath, ".json") + "-mcp-server";
-
-  const server = new McpServer({
-    name: serverName,
-    version: packageVersion ?? "0.0.0",
-  });
-
-  validatedConfig.tools.forEach(tool => {
+  config.tools.forEach(tool => {
     const inputSchema = buildInputSchema(tool.inputs);
     const toolPromptTemplate = loadToolPrompt(tool);
+    const toolAsync = resolveToolAsyncFlag(tool, serverAsync);
 
-    if (asyncArg) {
+    if (toolAsync) {
+      hasAsyncTools = true;
       server.registerTool(tool.name, {
         description: `${tool.description}\n\nThis tool runs asynchronously and returns a job ID. Use 'check-job-status' to poll for completion.`,
         inputSchema,
@@ -407,7 +412,7 @@ async function main() {
       }, (params) => {
         const { cwd, ...toolParams } = params;
         const fullTask = buildTaskPrompt(tool, toolPromptTemplate, toolParams, promptPrefix);
-        const jobId = startTaskAsync(validatedConfig.model, validatedConfig.modelId, fullTask, cwd, tool.name);
+        const jobId = startTaskAsync(config.model, config.modelId, fullTask, cwd, tool.name);
         const structuredContent = {
           jobId,
           status: "running",
@@ -427,7 +432,7 @@ async function main() {
       }, async (params) => {
         const { cwd, ...toolParams } = params;
         const fullTask = buildTaskPrompt(tool, toolPromptTemplate, toolParams, promptPrefix);
-        const result = await executeTask(validatedConfig.model, validatedConfig.modelId, fullTask, cwd);
+        const result = await executeTask(config.model, config.modelId, fullTask, cwd);
         return {
           content: [{ type: "text", text: `stdout: ${result.stdout}\nstderr: ${result.stderr}` }],
           structuredContent: result,
@@ -437,7 +442,27 @@ async function main() {
     }
   });
 
-  if (asyncArg) {
+  return hasAsyncTools;
+}
+
+/**
+ * The main function to set up and start the MCP server.
+ */
+async function main() {
+  const { configPath, promptArg, asyncArg, handshakeAndExitArg } = parseCliArgs();
+  const validatedConfig = loadConfig(configPath);
+  const promptPrefix = loadPromptPrefix(promptArg);
+
+  const serverName = validatedConfig.name || basename(configPath, ".json") + "-mcp-server";
+
+  const server = new McpServer({
+    name: serverName,
+    version: packageVersion ?? "0.0.0",
+  });
+
+  const hasAsyncTools = registerConfiguredTools(server, validatedConfig, promptPrefix, asyncArg);
+
+  if (hasAsyncTools) {
     server.registerTool("check-job-status", {
       description: "Check the status of an async job. Poll this tool until status is 'completed' or 'failed'. Returns the job result when complete.",
       inputSchema: { jobId: z.string().describe("The job ID returned from the async tool call") },
@@ -520,29 +545,18 @@ if (require.main === module) {
 
 
 if (process.env.NODE_ENV === 'test') {
-
   module.exports = {
-
     parseCliArgs,
-
     loadConfig,
-
     loadPromptPrefix,
-
     substitutePromptVariables,
-
     buildTaskPrompt,
-
+    resolveToolAsyncFlag,
     executeTask,
-
     startTaskAsync,
-
     createHandshakeSummary,
-
+    registerConfiguredTools,
     resolveJobTimeoutMs,
-
     jobs
-
   };
-
 }
