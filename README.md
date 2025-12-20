@@ -97,6 +97,16 @@ The server is configured using a JSON file. This file can be located anywhere on
 | `inputs` | No | Array of input parameters |
 | `command` / `args` | No | Optional; currently not executed by the server. The model prompt drives the CLI call. Extend `src/main.js` if you want per-tool shell commands. |
 
+#### How Tool Arguments Become the Final Prompt
+
+When a tool is invoked, the server builds a single prompt string that is passed to the model CLI:
+
+- If `prompt` or `promptFile` is provided, the template is used and `{{variable}}` placeholders are replaced with the incoming tool arguments.
+- If no prompt template is provided, the server falls back to:
+  - the first `string` input value (if any), otherwise
+  - `JSON.stringify(toolParams)` for all inputs.
+- If the CLI `--prompt` flag is used, that prefix is prepended to the task with a newline separator.
+
 ### Input Definition
 
 | Field | Required | Description |

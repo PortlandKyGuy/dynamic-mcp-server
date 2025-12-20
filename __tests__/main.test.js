@@ -1,4 +1,4 @@
-const { parseCliArgs, loadConfig, loadPromptPrefix, substitutePromptVariables, executeTask, startTaskAsync } = require('../src/main');
+const { parseCliArgs, loadConfig, loadPromptPrefix, substitutePromptVariables, buildTaskPrompt, executeTask, startTaskAsync } = require('../src/main');
 const fs = require('fs');
 const { resolve } = require('path');
 const execa = require('execa');
@@ -33,6 +33,37 @@ describe('substitutePromptVariables', () => {
     const params = { name: 'John' };
     const result = substitutePromptVariables(template, params);
     expect(result).toBe('Hello, John! You are  years old.');
+  });
+});
+
+describe('buildTaskPrompt', () => {
+  it('should substitute variables when a template is provided', () => {
+    const tool = { inputs: [{ name: 'name', type: 'string' }] };
+    const result = buildTaskPrompt(tool, 'Hello {{name}}', { name: 'Ada' }, null);
+    expect(result).toBe('Hello Ada');
+  });
+
+  it('should fall back to the first string input when no template is provided', () => {
+    const tool = {
+      inputs: [
+        { name: 'count', type: 'number' },
+        { name: 'query', type: 'string' }
+      ]
+    };
+    const result = buildTaskPrompt(tool, null, { count: 2, query: 'Find results' }, null);
+    expect(result).toBe('Find results');
+  });
+
+  it('should fall back to JSON when no string input is present', () => {
+    const tool = { inputs: [{ name: 'count', type: 'number' }] };
+    const result = buildTaskPrompt(tool, null, { count: 2 }, null);
+    expect(result).toBe(JSON.stringify({ count: 2 }));
+  });
+
+  it('should prepend the prompt prefix when provided', () => {
+    const tool = { inputs: [{ name: 'query', type: 'string' }] };
+    const result = buildTaskPrompt(tool, null, { query: 'Ship it' }, 'Prefix');
+    expect(result).toBe('Prefix\nShip it');
   });
 });
 

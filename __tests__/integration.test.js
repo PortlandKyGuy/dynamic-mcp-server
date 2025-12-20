@@ -3,6 +3,7 @@ const path = require('path');
 
 const mainScript = path.resolve(__dirname, '../src/main.js');
 const configFile = path.resolve(__dirname, 'test-config.json');
+const { version: packageVersion } = require('../package.json');
 
 describe('Integration Tests', () => {
   it('should start the server and output the correct MCP handshake', (done) => {
@@ -23,7 +24,7 @@ describe('Integration Tests', () => {
       expect(output).toEqual({
         mcp_version: '1.0',
         server_name: 'Test Server',
-        server_version: '1.0.0',
+        server_version: packageVersion,
         tools: [
           {
             toolName: 'test',
