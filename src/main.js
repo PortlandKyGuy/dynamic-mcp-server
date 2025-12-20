@@ -66,6 +66,7 @@ const ConfigSchemas = {
  */
 const jobs = new Map();
 let jobIdCounter = 0;
+const DEFAULT_JOB_TIMEOUT_MS = 20 * 60 * 1000;
 
 /**
  * Generates a unique ID for a new job.
@@ -111,6 +112,13 @@ function parseCliArgs() {
   return { configPath, promptArg, asyncArg, handshakeAndExitArg };
 }
 
+function resolveJobTimeoutMs() {
+  const parsed = Number.parseInt(process.env.DYNAMIC_MCP_JOB_TIMEOUT_MS ?? "", 10);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return parsed;
+  }
+  return DEFAULT_JOB_TIMEOUT_MS;
+}
 
 /**
  * Converts a JSON type string to a Zod schema object.
@@ -237,7 +245,14 @@ async function executeTask(model, modelId, task, cwd) {
  */
 function startTaskAsync(model, modelId, task, cwd, toolName) {
   const jobId = generateJobId();
-  jobs.set(jobId, { status: "running", toolName, startedAt: new Date().toISOString(), result: null });
+  const timeoutMs = resolveJobTimeoutMs();
+  jobs.set(jobId, {
+    status: "running",
+    toolName,
+    startedAt: new Date().toISOString(),
+    result: null,
+    timeoutMs,
+  });
 
   const cliConfig = CLI_CONFIG[model];
   const args = [...cliConfig.baseArgs, task];
@@ -251,20 +266,63 @@ function startTaskAsync(model, modelId, task, cwd, toolName) {
     stdin: "ignore",
   });
 
-  subprocess.then(({ exitCode, stdout, stderr }) => {
+  let timeoutId = null;
+  if (timeoutMs > 0) {
+    timeoutId = setTimeout(() => {
+      const job = jobs.get(jobId);
+      if (!job || job.status !== "running") {
+        return;
+      }
+
+      jobs.set(jobId, {
+        ...job,
+        status: "failed",
+        completedAt: new Date().toISOString(),
+        result: {
+          exitCode: -1,
+          stdout: "",
+          stderr: `Timed out after ${timeoutMs}ms`,
+        },
+        timedOut: true,
+      });
+
+      if (typeof subprocess.kill === "function") {
+        subprocess.kill("SIGTERM");
+        setTimeout(() => {
+          try {
+            subprocess.kill("SIGKILL");
+          } catch (error) {
+            // best-effort cleanup
+          }
+        }, 5000);
+      }
+    }, timeoutMs);
+  }
+
+  const finalizeJob = (status, result) => {
+    const job = jobs.get(jobId);
+    if (!job || job.status !== "running") {
+      return;
+    }
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
     jobs.set(jobId, {
-      ...jobs.get(jobId),
-      status: (exitCode ?? -1) === 0 ? "completed" : "failed",
+      ...job,
+      status,
       completedAt: new Date().toISOString(),
-      result: { exitCode: exitCode ?? -1, stdout: stdout ?? "", stderr: stderr ?? "" },
+      result,
+    });
+  };
+
+  subprocess.then(({ exitCode, stdout, stderr }) => {
+    finalizeJob((exitCode ?? -1) === 0 ? "completed" : "failed", {
+      exitCode: exitCode ?? -1,
+      stdout: stdout ?? "",
+      stderr: stderr ?? "",
     });
   }).catch((error) => {
-    jobs.set(jobId, {
-      ...jobs.get(jobId),
-      status: "failed",
-      completedAt: new Date().toISOString(),
-      result: { exitCode: -1, stdout: "", stderr: error.message },
-    });
+    finalizeJob("failed", { exitCode: -1, stdout: "", stderr: error.message });
   });
 
   return jobId;
@@ -337,35 +395,29 @@ async function main() {
     version: packageVersion ?? "0.0.0",
   });
 
-  const pollForJobCompletion = (jobId, resolve) => {
-    const job = jobs.get(jobId);
-    if (job.status === "completed" || job.status === "failed") {
-      resolve({
-        content: [{ type: "text", text: `stdout: ${job.result.stdout}\nstderr: ${job.result.stderr}` }],
-        structuredContent: job.result,
-        isError: job.status === "failed",
-      });
-    } else {
-      setTimeout(() => pollForJobCompletion(jobId, resolve), 1000);
-    }
-  };
-
   validatedConfig.tools.forEach(tool => {
     const inputSchema = buildInputSchema(tool.inputs);
     const toolPromptTemplate = loadToolPrompt(tool);
 
     if (asyncArg) {
       server.registerTool(tool.name, {
-        description: tool.description,
+        description: `${tool.description}\n\nThis tool runs asynchronously and returns a job ID. Use 'check-job-status' to poll for completion.`,
         inputSchema,
-        outputSchema: { exitCode: z.number(), stdout: z.string(), stderr: z.string() }
+        outputSchema: { jobId: z.string(), status: z.string(), message: z.string() }
       }, (params) => {
-        return new Promise((resolve) => {
-          const { cwd, ...toolParams } = params;
-          const fullTask = buildTaskPrompt(tool, toolPromptTemplate, toolParams, promptPrefix);
-          const jobId = startTaskAsync(validatedConfig.model, validatedConfig.modelId, fullTask, cwd, tool.name);
-          pollForJobCompletion(jobId, resolve);
-        });
+        const { cwd, ...toolParams } = params;
+        const fullTask = buildTaskPrompt(tool, toolPromptTemplate, toolParams, promptPrefix);
+        const jobId = startTaskAsync(validatedConfig.model, validatedConfig.modelId, fullTask, cwd, tool.name);
+        const structuredContent = {
+          jobId,
+          status: "running",
+          message: `Job started. Use 'check-job-status' with jobId '${jobId}' to check progress.`,
+        };
+        return {
+          content: [{ type: "text", text: `Job started: ${jobId}\nStatus: running\n\nUse 'check-job-status' tool with this jobId to poll for completion.` }],
+          structuredContent,
+          isError: false,
+        };
       });
     } else {
       server.registerTool(tool.name, {
@@ -384,6 +436,62 @@ async function main() {
       });
     }
   });
+
+  if (asyncArg) {
+    server.registerTool("check-job-status", {
+      description: "Check the status of an async job. Poll this tool until status is 'completed' or 'failed'. Returns the job result when complete.",
+      inputSchema: { jobId: z.string().describe("The job ID returned from the async tool call") },
+      outputSchema: {
+        jobId: z.string(),
+        status: z.enum(["running", "completed", "failed"]),
+        toolName: z.string().optional(),
+        startedAt: z.string().optional(),
+        completedAt: z.string().optional(),
+        result: z.object({
+          exitCode: z.number(),
+          stdout: z.string(),
+          stderr: z.string(),
+        }).nullish(),
+      }
+    }, async ({ jobId }) => {
+      const job = jobs.get(jobId);
+
+      if (!job) {
+        const structuredContent = {
+          jobId,
+          status: "failed",
+          error: `Job not found: ${jobId}`,
+        };
+        return {
+          content: [{ type: "text", text: `Error: Job not found: ${jobId}` }],
+          structuredContent,
+          isError: true,
+        };
+      }
+
+      const structuredContent = {
+        jobId,
+        status: job.status,
+        toolName: job.toolName,
+        startedAt: job.startedAt,
+        completedAt: job.completedAt,
+        result: job.result,
+      };
+
+      let textContent;
+      if (job.status === "running") {
+        textContent = `Job ${jobId} is still running (started: ${job.startedAt}).\nPoll again to check for completion.`;
+      } else {
+        textContent = `Job ${jobId} ${job.status} (completed: ${job.completedAt})\n\nstdout: ${job.result?.stdout ?? ""}\nstderr: ${job.result?.stderr ?? ""}`;
+      }
+
+      return {
+        content: [{ type: "text", text: textContent }],
+        structuredContent,
+        isError: job.status === "failed",
+      };
+    });
+  }
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
@@ -429,7 +537,11 @@ if (process.env.NODE_ENV === 'test') {
 
     startTaskAsync,
 
-    createHandshakeSummary
+    createHandshakeSummary,
+
+    resolveJobTimeoutMs,
+
+    jobs
 
   };
 

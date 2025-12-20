@@ -236,7 +236,9 @@ Some MCP clients have tool execution timeouts. For long-running tasks, you can e
 dynamic-mcp-server --config /path/to/config.json --async
 ```
 
-When `--async` is used, the server will start the long-running task in the background and poll for its completion internally. This makes the asynchronous nature of the task transparent to the client. The client makes a single request and gets a single response, even though the server is doing a lot of work in the background.
+When `--async` is used, the server will start the task in the background and return a `jobId` immediately. Use the built-in `check-job-status` tool to poll until the job is `completed` or `failed`.
+
+**Timeouts:** async jobs are capped by `DYNAMIC_MCP_JOB_TIMEOUT_MS` (default: 20 minutes). When the timeout is reached, the subprocess is terminated and the job is marked `failed`.
 
 #### Claude
 

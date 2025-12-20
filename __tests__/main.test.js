@@ -1,10 +1,14 @@
-const { parseCliArgs, loadConfig, loadPromptPrefix, substitutePromptVariables, buildTaskPrompt, executeTask, startTaskAsync } = require('../src/main');
+const { parseCliArgs, loadConfig, loadPromptPrefix, substitutePromptVariables, buildTaskPrompt, executeTask, startTaskAsync, resolveJobTimeoutMs, jobs } = require('../src/main');
 const fs = require('fs');
 const { resolve } = require('path');
 const execa = require('execa');
 
 jest.mock('fs');
 jest.mock('execa', () => jest.fn().mockResolvedValue({}));
+
+beforeEach(() => {
+  jobs.clear();
+});
 
 describe('executeTask', () => {
   it('should call execa with the correct command and arguments', async () => {
@@ -17,6 +21,35 @@ describe('startTaskAsync', () => {
   it('should call execa with the correct command and arguments', () => {
     startTaskAsync('gemini', 'gemini-pro', 'test prompt', '/test/dir', 'test-tool');
     expect(execa).toHaveBeenCalledWith('gemini', ['--model', 'gemini-pro', '-y', '-p', 'test prompt'], expect.any(Object));
+  });
+
+  it('should return a jobId and store a running job', () => {
+    const jobId = startTaskAsync('gemini', 'gemini-pro', 'test prompt', '/test/dir', 'test-tool');
+    const job = jobs.get(jobId);
+    expect(jobId).toMatch(/^job_/);
+    expect(job.status).toBe('running');
+    expect(job.toolName).toBe('test-tool');
+  });
+
+  it('should mark the job as failed on timeout and attempt to kill the process', () => {
+    jest.useFakeTimers();
+    process.env.DYNAMIC_MCP_JOB_TIMEOUT_MS = '10';
+
+    const pending = new Promise(() => {});
+    pending.kill = jest.fn();
+    execa.mockReturnValueOnce(pending);
+
+    const jobId = startTaskAsync('gemini', 'gemini-pro', 'test prompt', '/test/dir', 'test-tool');
+
+    jest.advanceTimersByTime(11);
+
+    const job = jobs.get(jobId);
+    expect(job.status).toBe('failed');
+    expect(job.result.stderr).toContain('Timed out after 10ms');
+    expect(pending.kill).toHaveBeenCalledWith('SIGTERM');
+
+    delete process.env.DYNAMIC_MCP_JOB_TIMEOUT_MS;
+    jest.useRealTimers();
   });
 });
 
@@ -84,6 +117,21 @@ describe('loadPromptPrefix', () => {
     fs.readFileSync.mockReturnValue('File content');
     const result = loadPromptPrefix('prompt.txt');
     expect(result).toBe('File content');
+  });
+});
+
+describe('resolveJobTimeoutMs', () => {
+  it('should return the default when env var is missing', () => {
+    delete process.env.DYNAMIC_MCP_JOB_TIMEOUT_MS;
+    const timeoutMs = resolveJobTimeoutMs();
+    expect(timeoutMs).toBeGreaterThan(0);
+  });
+
+  it('should return the env value when valid', () => {
+    process.env.DYNAMIC_MCP_JOB_TIMEOUT_MS = '1234';
+    const timeoutMs = resolveJobTimeoutMs();
+    expect(timeoutMs).toBe(1234);
+    delete process.env.DYNAMIC_MCP_JOB_TIMEOUT_MS;
   });
 });
 
