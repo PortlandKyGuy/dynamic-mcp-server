@@ -181,6 +181,25 @@ function substitutePromptVariables(template, params) {
 }
 
 /**
+ * Builds the task prompt, ensuring tool parameters are included even when no template is provided.
+ * @param {object} tool - The tool definition.
+ * @param {string|null} toolPromptTemplate - The loaded tool prompt template.
+ * @param {object} toolParams - Parameters provided to the tool.
+ * @param {string|null} promptPrefix - Optional prefix from CLI.
+ * @returns {string} The final task prompt.
+ */
+function buildTaskPrompt(tool, toolPromptTemplate, toolParams, promptPrefix) {
+  let task;
+  if (toolPromptTemplate) {
+    task = substitutePromptVariables(toolPromptTemplate, toolParams);
+  } else {
+    const firstStringInput = (tool.inputs || []).find(input => input.type === "string");
+    task = firstStringInput ? String(toolParams[firstStringInput.name] ?? "") : JSON.stringify(toolParams);
+  }
+  return promptPrefix ? `${promptPrefix}\n${task}` : task;
+}
+
+/**
  * Executes a task by spawning a CLI process.
  * @param {string} model - The model to use ('claude' or 'codex').
  * @param {string|undefined} modelId - The specific model ID.
@@ -343,8 +362,7 @@ async function main() {
       }, (params) => {
         return new Promise((resolve) => {
           const { cwd, ...toolParams } = params;
-          const task = substitutePromptVariables(toolPromptTemplate, toolParams);
-          const fullTask = promptPrefix ? `${promptPrefix}\n${task}` : task;
+          const fullTask = buildTaskPrompt(tool, toolPromptTemplate, toolParams, promptPrefix);
           const jobId = startTaskAsync(validatedConfig.model, validatedConfig.modelId, fullTask, cwd, tool.name);
           pollForJobCompletion(jobId, resolve);
         });
@@ -356,8 +374,7 @@ async function main() {
         outputSchema: { exitCode: z.number(), stdout: z.string(), stderr: z.string() }
       }, async (params) => {
         const { cwd, ...toolParams } = params;
-        const task = substitutePromptVariables(toolPromptTemplate, toolParams);
-        const fullTask = promptPrefix ? `${promptPrefix}\n${task}` : task;
+        const fullTask = buildTaskPrompt(tool, toolPromptTemplate, toolParams, promptPrefix);
         const result = await executeTask(validatedConfig.model, validatedConfig.modelId, fullTask, cwd);
         return {
           content: [{ type: "text", text: `stdout: ${result.stdout}\nstderr: ${result.stderr}` }],
