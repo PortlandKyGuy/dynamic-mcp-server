@@ -94,6 +94,7 @@ The server is configured using a JSON file. This file can be located anywhere on
 | `description` | Yes | What the tool does |
 | `prompt` | No | Prompt template with `{{variable}}` placeholders |
 | `promptFile` | No | Path to a file containing the prompt template (takes precedence over `prompt`) |
+| `async` | No | Run this tool asynchronously. Overrides the server-level `--async` default. |
 | `inputs` | No | Array of input parameters |
 | `command` / `args` | No | Optional; currently not executed by the server. The model prompt drives the CLI call. Extend `src/main.js` if you want per-tool shell commands. |
 
@@ -229,16 +230,28 @@ Two layers of checks help catch protocol or CLI regressions early:
 
 ### Async Mode
 
-Some MCP clients have tool execution timeouts. For long-running tasks, you can enable async mode using the `--async` flag when starting the server.
+Some MCP clients have tool execution timeouts. For long-running tasks, you can enable async mode using the `--async` flag when starting the server. This sets the default for all tools, but each tool can override the behavior with `async: true` or `async: false` in the config.
 
 **Starting with async mode:**
 ```bash
 dynamic-mcp-server --config /path/to/config.json --async
 ```
 
-When `--async` is used, the server will start the task in the background and return a `jobId` immediately. Use the built-in `check-job-status` tool to poll until the job is `completed` or `failed`.
+When async is enabled (either via `--async` or a tool’s `async: true` setting), the server will start the task in the background and return a `jobId` immediately. Use the built-in `check-job-status` tool to poll until the job is `completed` or `failed`. The `check-job-status` tool is registered whenever at least one async tool exists.
 
 **Timeouts:** async jobs are capped by `DYNAMIC_MCP_JOB_TIMEOUT_MS` (default: 20 minutes). When the timeout is reached, the subprocess is terminated and the job is marked `failed`.
+
+**Per-tool async override example:**
+```json
+{
+  "name": "mixed-async-server",
+  "model": "gemini",
+  "tools": [
+    { "name": "fast-sync", "description": "Quick task", "async": false },
+    { "name": "long-async", "description": "Long-running task", "async": true }
+  ]
+}
+```
 
 #### Claude
 

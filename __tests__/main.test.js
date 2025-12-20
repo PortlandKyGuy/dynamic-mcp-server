@@ -1,4 +1,4 @@
-const { parseCliArgs, loadConfig, loadPromptPrefix, substitutePromptVariables, buildTaskPrompt, executeTask, startTaskAsync, resolveJobTimeoutMs, jobs } = require('../src/main');
+const { parseCliArgs, loadConfig, loadPromptPrefix, substitutePromptVariables, buildTaskPrompt, resolveToolAsyncFlag, executeTask, startTaskAsync, createHandshakeSummary, registerConfiguredTools, resolveJobTimeoutMs, jobs } = require('../src/main');
 const fs = require('fs');
 const { resolve } = require('path');
 const execa = require('execa');
@@ -97,6 +97,45 @@ describe('buildTaskPrompt', () => {
     const tool = { inputs: [{ name: 'query', type: 'string' }] };
     const result = buildTaskPrompt(tool, null, { query: 'Ship it' }, 'Prefix');
     expect(result).toBe('Prefix\nShip it');
+  });
+});
+
+describe('resolveToolAsyncFlag', () => {
+  it('should use the tool async flag when set', () => {
+    expect(resolveToolAsyncFlag({ async: false }, true)).toBe(false);
+    expect(resolveToolAsyncFlag({ async: true }, false)).toBe(true);
+  });
+
+  it('should fall back to server async when tool flag is missing', () => {
+    expect(resolveToolAsyncFlag({}, true)).toBe(true);
+    expect(resolveToolAsyncFlag({}, false)).toBe(false);
+  });
+});
+
+describe('registerConfiguredTools', () => {
+  it('should register mixed async and sync tools in the same server', () => {
+    const server = { registerTool: jest.fn() };
+    const config = {
+      model: 'gemini',
+      tools: [
+        { name: 'sync-tool', description: 'sync tool', inputs: [], async: false },
+        { name: 'async-tool', description: 'async tool', inputs: [] }
+      ]
+    };
+
+    const hasAsyncTools = registerConfiguredTools(server, config, null, true);
+
+    expect(hasAsyncTools).toBe(true);
+    expect(server.registerTool).toHaveBeenCalledTimes(2);
+
+    const syncToolCall = server.registerTool.mock.calls.find(call => call[0] === 'sync-tool');
+    const asyncToolCall = server.registerTool.mock.calls.find(call => call[0] === 'async-tool');
+
+    expect(syncToolCall[1].outputSchema).toHaveProperty('exitCode');
+    expect(syncToolCall[1].description).toBe('sync tool');
+
+    expect(asyncToolCall[1].outputSchema).toHaveProperty('jobId');
+    expect(asyncToolCall[1].description).toContain('runs asynchronously');
   });
 });
 
