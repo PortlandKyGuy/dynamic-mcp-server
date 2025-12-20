@@ -423,6 +423,8 @@ if (process.env.NODE_ENV === 'test') {
 
     substitutePromptVariables,
 
+    buildTaskPrompt,
+
     executeTask,
 
     startTaskAsync,
