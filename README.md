@@ -158,8 +158,8 @@ Environment variables:
 - `DYNAMIC_MCP_LOG_FORMAT`
 - `DYNAMIC_MCP_LOG_DESTINATION`
 - `DYNAMIC_MCP_LOG_CATEGORIES`
-- `DYNAMIC_MCP_LOG_PAYLOADS`
-- `DYNAMIC_MCP_LOG_TRUNCATE`
+- `DYNAMIC_MCP_LOG_PAYLOADS_ENABLED`
+- `DYNAMIC_MCP_LOG_PAYLOAD_MAX_CHARS`
 
 ---
 
@@ -194,7 +194,7 @@ MCP Clients are your Codex, Claude, Gemini CLIs. These settings tell your CLI wh
 | `--log-destination <dest>` | `stderr` or file path |
 | `--log-categories <list>` | Comma-separated list or `all` |
 | `--log-payloads` | Enable full request/response payload logging |
-| `--log-truncate <chars>` | Truncate payload logs to max char count |
+| `--log-payload-max-chars <chars>` | Truncate payload logs to max char count |
 | `--no-logging` | Disable logging |
 
 ### Prompt Prefix

@@ -159,10 +159,10 @@ function parseCliArgs() {
       }
     } else if (arg === "--log-payloads") {
       loggingArgs.logPayloads = true;
-    } else if (arg === "--log-truncate") {
+    } else if (arg === "--log-payload-max-chars") {
       loggingArgs.payloadMaxChars = Number.parseInt(process.argv[++i], 10);
       if (!Number.isFinite(loggingArgs.payloadMaxChars) || loggingArgs.payloadMaxChars <= 0) {
-        console.error("Error: --log-truncate requires a positive integer value");
+        console.error("Error: --log-payload-max-chars requires a positive integer value");
         process.exit(1);
       }
     } else if (arg === "--no-logging") {
@@ -250,8 +250,8 @@ function resolveLoggingConfig(configLogging, cliLogging, logDisabled, env = proc
     format: env.DYNAMIC_MCP_LOG_FORMAT,
     destination: env.DYNAMIC_MCP_LOG_DESTINATION,
     categories: env.DYNAMIC_MCP_LOG_CATEGORIES,
-    logPayloads: parseBooleanEnv(env.DYNAMIC_MCP_LOG_PAYLOADS),
-    payloadMaxChars: Number.parseInt(env.DYNAMIC_MCP_LOG_TRUNCATE ?? "", 10),
+    logPayloads: parseBooleanEnv(env.DYNAMIC_MCP_LOG_PAYLOADS_ENABLED),
+    payloadMaxChars: Number.parseInt(env.DYNAMIC_MCP_LOG_PAYLOAD_MAX_CHARS ?? "", 10),
   };
 
   let resolved = { ...DEFAULT_LOGGING };

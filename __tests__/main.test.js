@@ -255,7 +255,7 @@ describe('parseCliArgs', () => {
   });
 
   it('should correctly parse logging flags', () => {
-    process.argv.push('--config', 'config.json', '--log-level', 'debug', '--log-format', 'pretty', '--log-destination', '/tmp/log.txt', '--log-categories', 'requests,steps', '--log-payloads', '--log-truncate', '2048');
+    process.argv.push('--config', 'config.json', '--log-level', 'debug', '--log-format', 'pretty', '--log-destination', '/tmp/log.txt', '--log-categories', 'requests,steps', '--log-payloads', '--log-payload-max-chars', '2048');
     const { loggingArgs } = parseCliArgs();
     expect(loggingArgs.level).toBe('debug');
     expect(loggingArgs.format).toBe('pretty');
