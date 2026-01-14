@@ -96,7 +96,10 @@ The server is configured using a JSON file. This file can be located anywhere on
 | `prompt` | No | Prompt template with `{{variable}}` placeholders |
 | `promptFile` | No | Path to a file containing the prompt template (takes precedence over `prompt`) |
 | `async` | No | Run this tool asynchronously. Overrides the server-level `--async` default. |
+| `logging` | No | Optional per-tool logging overrides (same fields as server logging; see Logging section) |
 | `inputs` | No | Array of input parameters |
+
+Per-tool logging overrides are applied on top of server-level logging. CLI flags still take precedence over everything.
 | `command` / `args` | No | Optional; currently not executed by the server. The model prompt drives the CLI call. Extend `src/main.js` if you want per-tool shell commands. |
 
 #### How Tool Arguments Become the Final Prompt

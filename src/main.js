@@ -69,6 +69,7 @@ const ConfigSchemas = {
     prompt: z.string().optional(),
     promptFile: z.string().optional(),
     async: z.boolean().optional(),
+    logging: z.lazy(() => ConfigSchemas.Logging).optional(),
     inputs: z.array(z.lazy(() => ConfigSchemas.ConfigInput)).optional().default([]),
   }),
   Logging: z.object({
@@ -259,7 +260,8 @@ function resolveLoggingConfig(configLogging, cliLogging, logDisabled, env = proc
   resolved = { ...resolved, ...normalizeLoggingOverrides(envOverrides) };
   resolved = { ...resolved, ...normalizeLoggingOverrides(cliLogging) };
 
-  if (logDisabled || resolved.level === "off") {
+  const disabledByCli = Boolean(logDisabled);
+  if (disabledByCli || resolved.level === "off") {
     resolved.enabled = false;
   }
 
@@ -267,7 +269,28 @@ function resolveLoggingConfig(configLogging, cliLogging, logDisabled, env = proc
     resolved.categories = [];
   }
 
-  return resolved;
+  return { ...resolved, disabledByCli };
+}
+
+function resolveToolLoggingConfig(baseConfig, toolLogging) {
+  if (!baseConfig) return baseConfig;
+  if (baseConfig.disabledByCli) {
+    return { ...baseConfig, enabled: false };
+  }
+  const overrides = normalizeLoggingOverrides(toolLogging);
+  const merged = { ...baseConfig, ...overrides };
+  if (typeof overrides.enabled === "boolean") {
+    merged.enabled = overrides.enabled;
+  } else {
+    merged.enabled = baseConfig.enabled;
+  }
+  if (overrides.level === "off") {
+    merged.enabled = false;
+  }
+  if (!Array.isArray(merged.categories) || merged.categories.length === 0) {
+    merged.categories = [];
+  }
+  return merged;
 }
 
 function safeStringify(value) {
@@ -290,7 +313,7 @@ function maybeTruncatePayload(payload, maxChars) {
   return truncateString(safeStringify(payload), maxChars);
 }
 
-function createLogger(loggingConfig) {
+function createLogger(loggingConfig, streamRegistry) {
   const config = { ...DEFAULT_LOGGING, ...loggingConfig };
   const levelValue = LOG_LEVELS[config.level] ?? LOG_LEVELS.info;
   const categorySet = new Set(config.categories || []);
@@ -301,10 +324,18 @@ function createLogger(loggingConfig) {
   } else if (config.destination === "stderr") {
     stream = process.stderr;
   } else if (typeof config.destination === "string" && config.destination.trim()) {
-    try {
-      stream = createWriteStream(config.destination, { flags: "a" });
-    } catch (error) {
-      stream = process.stderr;
+    const destination = config.destination;
+    if (streamRegistry && streamRegistry.has(destination)) {
+      stream = streamRegistry.get(destination);
+    } else {
+      try {
+        stream = createWriteStream(destination, { flags: "a" });
+        if (streamRegistry) {
+          streamRegistry.set(destination, stream);
+        }
+      } catch (error) {
+        stream = process.stderr;
+      }
     }
   } else {
     stream = process.stderr;
@@ -708,16 +739,18 @@ function createHandshakeSummary(config, serverName) {
   };
 }
 
-function registerConfiguredTools(server, config, promptPrefix, serverAsync, logger) {
+function registerConfiguredTools(server, config, promptPrefix, serverAsync, loggingConfig, streamRegistry) {
   let hasAsyncTools = false;
 
   config.tools.forEach(tool => {
+    const toolLoggingConfig = resolveToolLoggingConfig(loggingConfig, tool.logging);
+    const toolLogger = createLogger(toolLoggingConfig, streamRegistry);
     const inputSchema = buildInputSchema(tool.inputs);
     const toolPromptTemplate = loadToolPrompt(tool);
     const toolAsync = resolveToolAsyncFlag(tool, serverAsync);
 
-    if (logger) {
-      logger.info("steps", "tool_registered", {
+    if (toolLogger) {
+      toolLogger.info("steps", "tool_registered", {
         toolName: tool.name,
         async: toolAsync,
       });
@@ -732,18 +765,18 @@ function registerConfiguredTools(server, config, promptPrefix, serverAsync, logg
       }, (params) => {
         const { cwd, ...toolParams } = params;
         const fullTask = buildTaskPrompt(tool, toolPromptTemplate, toolParams, promptPrefix);
-        if (logger) {
+        if (toolLogger) {
           const requestMeta = buildRequestMeta(tool.name, toolAsync, toolParams, fullTask, promptPrefix);
-          const payload = logger.shouldLogPayloads()
-            ? maybeTruncatePayload({ params: toolParams, task: fullTask }, logger.config.payloadMaxChars)
+          const payload = toolLogger.shouldLogPayloads()
+            ? maybeTruncatePayload({ params: toolParams, task: fullTask }, toolLogger.config.payloadMaxChars)
             : undefined;
-          logger.info("requests", "tool_request", requestMeta, payload);
+          toolLogger.info("requests", "tool_request", requestMeta, payload);
         }
 
-        const jobId = startTaskAsync(config.model, config.modelId, fullTask, cwd, tool.name, logger);
-        if (logger) {
+        const jobId = startTaskAsync(config.model, config.modelId, fullTask, cwd, tool.name, toolLogger);
+        if (toolLogger) {
           const responseMeta = buildResponseMeta(tool.name, toolAsync, null, 0, jobId);
-          logger.info("responses", "tool_response", responseMeta);
+          toolLogger.info("responses", "tool_response", responseMeta);
         }
 
         const structuredContent = {
@@ -766,21 +799,21 @@ function registerConfiguredTools(server, config, promptPrefix, serverAsync, logg
         const { cwd, ...toolParams } = params;
         const fullTask = buildTaskPrompt(tool, toolPromptTemplate, toolParams, promptPrefix);
         const startTime = Date.now();
-        if (logger) {
+        if (toolLogger) {
           const requestMeta = buildRequestMeta(tool.name, toolAsync, toolParams, fullTask, promptPrefix);
-          const payload = logger.shouldLogPayloads()
-            ? maybeTruncatePayload({ params: toolParams, task: fullTask }, logger.config.payloadMaxChars)
+          const payload = toolLogger.shouldLogPayloads()
+            ? maybeTruncatePayload({ params: toolParams, task: fullTask }, toolLogger.config.payloadMaxChars)
             : undefined;
-          logger.info("requests", "tool_request", requestMeta, payload);
+          toolLogger.info("requests", "tool_request", requestMeta, payload);
         }
         const result = await executeTask(config.model, config.modelId, fullTask, cwd);
-        if (logger) {
+        if (toolLogger) {
           const durationMs = Date.now() - startTime;
           const responseMeta = buildResponseMeta(tool.name, toolAsync, result, durationMs);
-          const payload = logger.shouldLogPayloads()
-            ? maybeTruncatePayload({ stdout: result.stdout ?? "", stderr: result.stderr ?? "" }, logger.config.payloadMaxChars)
+          const payload = toolLogger.shouldLogPayloads()
+            ? maybeTruncatePayload({ stdout: result.stdout ?? "", stderr: result.stderr ?? "" }, toolLogger.config.payloadMaxChars)
             : undefined;
-          logger.info("responses", "tool_response", responseMeta, payload);
+          toolLogger.info("responses", "tool_response", responseMeta, payload);
         }
         return {
           content: [{ type: "text", text: `stdout: ${result.stdout}\nstderr: ${result.stderr}` }],
@@ -802,7 +835,8 @@ async function main() {
   const validatedConfig = loadConfig(configPath);
   const promptPrefix = loadPromptPrefix(promptArg);
   const loggingConfig = resolveLoggingConfig(validatedConfig.logging, loggingArgs, logDisabled);
-  const logger = createLogger(loggingConfig);
+  const streamRegistry = new Map();
+  const logger = createLogger(loggingConfig, streamRegistry);
 
   const serverName = validatedConfig.name || basename(configPath, ".json") + "-mcp-server";
 
@@ -819,7 +853,7 @@ async function main() {
     });
   }
 
-  const hasAsyncTools = registerConfiguredTools(server, validatedConfig, promptPrefix, asyncArg, logger);
+  const hasAsyncTools = registerConfiguredTools(server, validatedConfig, promptPrefix, asyncArg, loggingConfig, streamRegistry);
 
   if (hasAsyncTools) {
     server.registerTool("check-job-status", {
@@ -951,6 +985,7 @@ if (process.env.NODE_ENV === 'test') {
     substitutePromptVariables,
     buildTaskPrompt,
     resolveLoggingConfig,
+    resolveToolLoggingConfig,
     normalizeLogCategories,
     resolveToolAsyncFlag,
     executeTask,

@@ -1,4 +1,4 @@
-const { parseCliArgs, loadConfig, loadPromptPrefix, substitutePromptVariables, buildTaskPrompt, resolveLoggingConfig, normalizeLogCategories, resolveToolAsyncFlag, executeTask, startTaskAsync, createHandshakeSummary, registerConfiguredTools, resolveJobTimeoutMs, jobs } = require('../src/main');
+const { parseCliArgs, loadConfig, loadPromptPrefix, substitutePromptVariables, buildTaskPrompt, resolveLoggingConfig, resolveToolLoggingConfig, normalizeLogCategories, resolveToolAsyncFlag, executeTask, startTaskAsync, createHandshakeSummary, registerConfiguredTools, resolveJobTimeoutMs, jobs } = require('../src/main');
 const fs = require('fs');
 const { resolve } = require('path');
 const execa = require('execa');
@@ -313,6 +313,21 @@ describe('resolveLoggingConfig', () => {
 
   it('should disable logging when --no-logging is used', () => {
     const resolved = resolveLoggingConfig({ level: 'info' }, {}, true, {});
+    expect(resolved.enabled).toBe(false);
+  });
+});
+
+describe('resolveToolLoggingConfig', () => {
+  it('should allow tool-level overrides', () => {
+    const base = resolveLoggingConfig({ level: 'info' }, {}, false, {});
+    const resolved = resolveToolLoggingConfig(base, { level: 'debug', categories: ['steps'] });
+    expect(resolved.level).toBe('debug');
+    expect(resolved.categories).toEqual(['steps']);
+  });
+
+  it('should respect CLI disable', () => {
+    const base = resolveLoggingConfig({ level: 'info' }, {}, true, {});
+    const resolved = resolveToolLoggingConfig(base, { level: 'debug', enabled: true });
     expect(resolved.enabled).toBe(false);
   });
 });
