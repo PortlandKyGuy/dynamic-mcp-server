@@ -1,4 +1,4 @@
-const { parseCliArgs, loadConfig, loadPromptPrefix, substitutePromptVariables, buildTaskPrompt, resolveToolAsyncFlag, executeTask, startTaskAsync, createHandshakeSummary, registerConfiguredTools, resolveJobTimeoutMs, jobs } = require('../src/main');
+const { parseCliArgs, loadConfig, loadPromptPrefix, substitutePromptVariables, buildTaskPrompt, resolveLoggingConfig, normalizeLogCategories, resolveToolAsyncFlag, executeTask, startTaskAsync, createHandshakeSummary, registerConfiguredTools, resolveJobTimeoutMs, jobs } = require('../src/main');
 const fs = require('fs');
 const { resolve } = require('path');
 const execa = require('execa');
@@ -19,12 +19,12 @@ describe('executeTask', () => {
 
 describe('startTaskAsync', () => {
   it('should call execa with the correct command and arguments', () => {
-    startTaskAsync('gemini', 'gemini-pro', 'test prompt', '/test/dir', 'test-tool');
+    startTaskAsync('gemini', 'gemini-pro', 'test prompt', '/test/dir', 'test-tool', null);
     expect(execa).toHaveBeenCalledWith('gemini', ['--model', 'gemini-pro', '-y', '-p', 'test prompt'], expect.any(Object));
   });
 
   it('should return a jobId and store a running job', () => {
-    const jobId = startTaskAsync('gemini', 'gemini-pro', 'test prompt', '/test/dir', 'test-tool');
+    const jobId = startTaskAsync('gemini', 'gemini-pro', 'test prompt', '/test/dir', 'test-tool', null);
     const job = jobs.get(jobId);
     expect(jobId).toMatch(/^job_/);
     expect(job.status).toBe('running');
@@ -39,7 +39,7 @@ describe('startTaskAsync', () => {
     pending.kill = jest.fn();
     execa.mockReturnValueOnce(pending);
 
-    const jobId = startTaskAsync('gemini', 'gemini-pro', 'test prompt', '/test/dir', 'test-tool');
+    const jobId = startTaskAsync('gemini', 'gemini-pro', 'test prompt', '/test/dir', 'test-tool', null);
 
     jest.advanceTimersByTime(11);
 
@@ -123,7 +123,7 @@ describe('registerConfiguredTools', () => {
       ]
     };
 
-    const hasAsyncTools = registerConfiguredTools(server, config, null, true);
+    const hasAsyncTools = registerConfiguredTools(server, config, null, true, null);
 
     expect(hasAsyncTools).toBe(true);
     expect(server.registerTool).toHaveBeenCalledTimes(2);
@@ -254,6 +254,23 @@ describe('parseCliArgs', () => {
     expect(asyncArg).toBe(true);
   });
 
+  it('should correctly parse logging flags', () => {
+    process.argv.push('--config', 'config.json', '--log-level', 'debug', '--log-format', 'pretty', '--log-destination', '/tmp/log.txt', '--log-categories', 'requests,steps', '--log-payloads', '--log-truncate', '2048');
+    const { loggingArgs } = parseCliArgs();
+    expect(loggingArgs.level).toBe('debug');
+    expect(loggingArgs.format).toBe('pretty');
+    expect(loggingArgs.destination).toBe('/tmp/log.txt');
+    expect(loggingArgs.categories).toBe('requests,steps');
+    expect(loggingArgs.logPayloads).toBe(true);
+    expect(loggingArgs.payloadMaxChars).toBe(2048);
+  });
+
+  it('should allow disabling logging', () => {
+    process.argv.push('--config', 'config.json', '--no-logging');
+    const { logDisabled } = parseCliArgs();
+    expect(logDisabled).toBe(true);
+  });
+
   it('should exit with an error if no config file path is provided', () => {
     parseCliArgs();
     expect(process.exit).toHaveBeenCalledWith(1);
@@ -266,5 +283,47 @@ describe('parseCliArgs', () => {
     parseCliArgs();
     expect(process.exit).toHaveBeenCalledWith(1);
     expect(console.error).toHaveBeenCalledWith('Error: --prompt requires a value (string or file path)');
+  });
+});
+
+describe('resolveLoggingConfig', () => {
+  const originalEnv = process.env;
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  it('should apply defaults when no overrides are provided', () => {
+    const resolved = resolveLoggingConfig(undefined, {}, false, {});
+    expect(resolved.enabled).toBe(true);
+    expect(resolved.level).toBe('info');
+    expect(resolved.destination).toBe('stderr');
+    expect(resolved.format).toBe('json');
+    expect(resolved.categories).toEqual(expect.arrayContaining(['requests', 'responses', 'steps']));
+  });
+
+  it('should apply precedence cli > env > config', () => {
+    process.env = {
+      ...originalEnv,
+      DYNAMIC_MCP_LOG_LEVEL: 'warn',
+    };
+    const resolved = resolveLoggingConfig({ level: 'info' }, { level: 'debug' }, false, process.env);
+    expect(resolved.level).toBe('debug');
+  });
+
+  it('should disable logging when --no-logging is used', () => {
+    const resolved = resolveLoggingConfig({ level: 'info' }, {}, true, {});
+    expect(resolved.enabled).toBe(false);
+  });
+});
+
+describe('normalizeLogCategories', () => {
+  it('should normalize comma-separated categories', () => {
+    expect(normalizeLogCategories('requests, steps')).toEqual(['requests', 'steps']);
+  });
+
+  it('should expand all categories', () => {
+    const categories = normalizeLogCategories('all');
+    expect(categories).toEqual(expect.arrayContaining(['requests', 'responses', 'steps']));
   });
 });

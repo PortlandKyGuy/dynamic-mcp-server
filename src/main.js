@@ -13,7 +13,24 @@ const { z } = require("zod");
 const execa = require("execa");
 const { readFileSync, existsSync } = require("node:fs");
 const { resolve, basename } = require("node:path");
+const { createWriteStream } = require("node:fs");
 const { version: packageVersion } = require("../package.json");
+
+const LOG_LEVEL_ORDER = ["error", "warn", "info", "debug", "trace"];
+const LOG_LEVELS = LOG_LEVEL_ORDER.reduce((acc, level, index) => {
+  acc[level] = index;
+  return acc;
+}, {});
+const LOG_CATEGORY_VALUES = ["requests", "responses", "steps"];
+const DEFAULT_LOGGING = {
+  enabled: true,
+  level: "info",
+  format: "json",
+  destination: "stderr",
+  categories: LOG_CATEGORY_VALUES,
+  logPayloads: false,
+  payloadMaxChars: null,
+};
 
 /**
  * Configuration for supported AI model CLIs.
@@ -54,10 +71,23 @@ const ConfigSchemas = {
     async: z.boolean().optional(),
     inputs: z.array(z.lazy(() => ConfigSchemas.ConfigInput)).optional().default([]),
   }),
+  Logging: z.object({
+    enabled: z.boolean().optional(),
+    level: z.enum([...LOG_LEVEL_ORDER, "off"]).optional(),
+    format: z.enum(["json", "pretty"]).optional(),
+    destination: z.string().optional(),
+    categories: z.union([
+      z.literal("all"),
+      z.array(z.enum(LOG_CATEGORY_VALUES)),
+    ]).optional(),
+    logPayloads: z.boolean().optional(),
+    payloadMaxChars: z.number().int().positive().optional(),
+  }).optional(),
   Config: z.object({
     name: z.string().optional(),
     model: z.enum(["claude", "codex", "gemini"]),
     modelId: z.string().optional(),
+    logging: z.lazy(() => ConfigSchemas.Logging).optional(),
     tools: z.array(z.lazy(() => ConfigSchemas.ConfigTool)).min(1),
   }),
 };
@@ -82,6 +112,8 @@ function parseCliArgs() {
   let promptArg = null;
   let asyncArg = false;
   let handshakeAndExitArg = false;
+  const loggingArgs = {};
+  let logDisabled = false;
 
   for (let i = 2; i < process.argv.length; i++) {
     const arg = process.argv[i];
@@ -101,6 +133,40 @@ function parseCliArgs() {
       asyncArg = true;
     } else if (arg === "--handshake-and-exit") {
       handshakeAndExitArg = true;
+    } else if (arg === "--log-level") {
+      loggingArgs.level = process.argv[++i];
+      if (!loggingArgs.level) {
+        console.error("Error: --log-level requires a value");
+        process.exit(1);
+      }
+    } else if (arg === "--log-format") {
+      loggingArgs.format = process.argv[++i];
+      if (!loggingArgs.format) {
+        console.error("Error: --log-format requires a value");
+        process.exit(1);
+      }
+    } else if (arg === "--log-destination") {
+      loggingArgs.destination = process.argv[++i];
+      if (!loggingArgs.destination) {
+        console.error("Error: --log-destination requires a value");
+        process.exit(1);
+      }
+    } else if (arg === "--log-categories") {
+      loggingArgs.categories = process.argv[++i];
+      if (!loggingArgs.categories) {
+        console.error("Error: --log-categories requires a value");
+        process.exit(1);
+      }
+    } else if (arg === "--log-payloads") {
+      loggingArgs.logPayloads = true;
+    } else if (arg === "--log-truncate") {
+      loggingArgs.payloadMaxChars = Number.parseInt(process.argv[++i], 10);
+      if (!Number.isFinite(loggingArgs.payloadMaxChars) || loggingArgs.payloadMaxChars <= 0) {
+        console.error("Error: --log-truncate requires a positive integer value");
+        process.exit(1);
+      }
+    } else if (arg === "--no-logging") {
+      logDisabled = true;
     }
   }
 
@@ -110,7 +176,7 @@ function parseCliArgs() {
     process.exit(1);
   }
 
-  return { configPath, promptArg, asyncArg, handshakeAndExitArg };
+  return { configPath, promptArg, asyncArg, handshakeAndExitArg, loggingArgs, logDisabled };
 }
 
 function resolveJobTimeoutMs() {
@@ -119,6 +185,192 @@ function resolveJobTimeoutMs() {
     return parsed;
   }
   return DEFAULT_JOB_TIMEOUT_MS;
+}
+
+function parseBooleanEnv(value) {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return undefined;
+}
+
+function normalizeLogLevel(value) {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "off") return "off";
+  if (LOG_LEVELS[normalized] !== undefined) return normalized;
+  return undefined;
+}
+
+function normalizeLogFormat(value) {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "json" || normalized === "pretty") return normalized;
+  return undefined;
+}
+
+function normalizeLogCategories(value) {
+  if (!value) return undefined;
+  const raw = Array.isArray(value) ? value : String(value).split(",");
+  const normalized = raw
+    .map(item => String(item).trim().toLowerCase())
+    .filter(Boolean);
+  if (normalized.includes("all")) {
+    return [...LOG_CATEGORY_VALUES];
+  }
+  const categories = normalized.filter(item => LOG_CATEGORY_VALUES.includes(item));
+  return categories.length > 0 ? categories : undefined;
+}
+
+function normalizeLoggingOverrides(input) {
+  if (!input || typeof input !== "object") return {};
+  const overrides = {};
+  if (typeof input.enabled === "boolean") overrides.enabled = input.enabled;
+  if (typeof input.logPayloads === "boolean") overrides.logPayloads = input.logPayloads;
+  const level = normalizeLogLevel(input.level);
+  if (level) overrides.level = level;
+  const format = normalizeLogFormat(input.format);
+  if (format) overrides.format = format;
+  if (typeof input.destination === "string" && input.destination.trim()) {
+    overrides.destination = input.destination.trim();
+  }
+  const categories = normalizeLogCategories(input.categories);
+  if (categories) overrides.categories = categories;
+  if (Number.isFinite(input.payloadMaxChars) && input.payloadMaxChars > 0) {
+    overrides.payloadMaxChars = input.payloadMaxChars;
+  }
+  return overrides;
+}
+
+function resolveLoggingConfig(configLogging, cliLogging, logDisabled, env = process.env) {
+  const envOverrides = {
+    enabled: parseBooleanEnv(env.DYNAMIC_MCP_LOG_ENABLED),
+    level: env.DYNAMIC_MCP_LOG_LEVEL,
+    format: env.DYNAMIC_MCP_LOG_FORMAT,
+    destination: env.DYNAMIC_MCP_LOG_DESTINATION,
+    categories: env.DYNAMIC_MCP_LOG_CATEGORIES,
+    logPayloads: parseBooleanEnv(env.DYNAMIC_MCP_LOG_PAYLOADS),
+    payloadMaxChars: Number.parseInt(env.DYNAMIC_MCP_LOG_TRUNCATE ?? "", 10),
+  };
+
+  let resolved = { ...DEFAULT_LOGGING };
+  resolved = { ...resolved, ...normalizeLoggingOverrides(configLogging) };
+  resolved = { ...resolved, ...normalizeLoggingOverrides(envOverrides) };
+  resolved = { ...resolved, ...normalizeLoggingOverrides(cliLogging) };
+
+  if (logDisabled || resolved.level === "off") {
+    resolved.enabled = false;
+  }
+
+  if (!Array.isArray(resolved.categories) || resolved.categories.length === 0) {
+    resolved.categories = [];
+  }
+
+  return resolved;
+}
+
+function safeStringify(value) {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch (error) {
+    return String(value);
+  }
+}
+
+function truncateString(value, maxChars) {
+  if (!Number.isFinite(maxChars) || maxChars <= 0) return value;
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, maxChars)}...`;
+}
+
+function maybeTruncatePayload(payload, maxChars) {
+  if (!Number.isFinite(maxChars) || maxChars <= 0) return payload;
+  return truncateString(safeStringify(payload), maxChars);
+}
+
+function createLogger(loggingConfig) {
+  const config = { ...DEFAULT_LOGGING, ...loggingConfig };
+  const levelValue = LOG_LEVELS[config.level] ?? LOG_LEVELS.info;
+  const categorySet = new Set(config.categories || []);
+
+  let stream = null;
+  if (config.destination === "stdout") {
+    stream = process.stdout;
+  } else if (config.destination === "stderr") {
+    stream = process.stderr;
+  } else if (typeof config.destination === "string" && config.destination.trim()) {
+    try {
+      stream = createWriteStream(config.destination, { flags: "a" });
+    } catch (error) {
+      stream = process.stderr;
+    }
+  } else {
+    stream = process.stderr;
+  }
+
+  const shouldLogPayloads = () => config.logPayloads || levelValue >= LOG_LEVELS.debug;
+
+  const shouldLog = (level, category) => {
+    if (!config.enabled) return false;
+    const levelRank = LOG_LEVELS[level];
+    if (levelRank === undefined || levelRank > levelValue) return false;
+    if (categorySet.size === 0) return false;
+    if (!categorySet.has(category)) return false;
+    return true;
+  };
+
+  const writeLine = (line) => {
+    if (!line || !stream || typeof stream.write !== "function") return;
+    try {
+      stream.write(`${line}\n`);
+    } catch (error) {
+      // swallow logging errors
+    }
+  };
+
+  const formatLine = (level, category, message, meta, payload) => {
+    const timestamp = new Date().toISOString();
+    if (config.format === "pretty") {
+      let line = `[${timestamp}] ${level.toUpperCase()} ${category} ${message}`;
+      if (meta && Object.keys(meta).length > 0) {
+        line += ` ${safeStringify(meta)}`;
+      }
+      if (payload !== undefined) {
+        line += ` payload=${safeStringify(payload)}`;
+      }
+      return line;
+    }
+    const entry = {
+      timestamp,
+      level,
+      category,
+      message,
+      ...meta,
+    };
+    if (payload !== undefined) {
+      entry.payload = payload;
+    }
+    return safeStringify(entry);
+  };
+
+  const log = (level, category, message, meta = {}, payload) => {
+    if (!shouldLog(level, category)) return;
+    const line = formatLine(level, category, message, meta, payload);
+    writeLine(line);
+  };
+
+  return {
+    config,
+    shouldLogPayloads,
+    log,
+    error: (category, message, meta, payload) => log("error", category, message, meta, payload),
+    warn: (category, message, meta, payload) => log("warn", category, message, meta, payload),
+    info: (category, message, meta, payload) => log("info", category, message, meta, payload),
+    debug: (category, message, meta, payload) => log("debug", category, message, meta, payload),
+    trace: (category, message, meta, payload) => log("trace", category, message, meta, payload),
+  };
 }
 
 /**
@@ -208,6 +460,41 @@ function buildTaskPrompt(tool, toolPromptTemplate, toolParams, promptPrefix) {
   return promptPrefix ? `${promptPrefix}\n${task}` : task;
 }
 
+function countChars(value) {
+  return safeStringify(value).length;
+}
+
+function buildRequestMeta(toolName, toolAsync, toolParams, task, promptPrefix) {
+  return {
+    toolName,
+    async: toolAsync,
+    paramsChars: countChars(toolParams),
+    taskChars: task.length,
+    hasPromptPrefix: Boolean(promptPrefix),
+  };
+}
+
+function buildResponseMeta(toolName, toolAsync, result, durationMs, jobId) {
+  const meta = {
+    toolName,
+    async: toolAsync,
+    durationMs,
+  };
+
+  if (jobId) {
+    meta.jobId = jobId;
+    return meta;
+  }
+
+  if (result) {
+    meta.exitCode = result.exitCode;
+    meta.stdoutChars = countChars(result.stdout ?? "");
+    meta.stderrChars = countChars(result.stderr ?? "");
+  }
+
+  return meta;
+}
+
 /**
  * Resolves whether a tool should run asynchronously.
  * Tool-level async setting overrides the server default.
@@ -258,7 +545,7 @@ async function executeTask(model, modelId, task, cwd) {
  * @param {string} toolName - The name of the tool being executed.
  * @returns {string} The job ID.
  */
-function startTaskAsync(model, modelId, task, cwd, toolName) {
+function startTaskAsync(model, modelId, task, cwd, toolName, logger) {
   const jobId = generateJobId();
   const timeoutMs = resolveJobTimeoutMs();
   jobs.set(jobId, {
@@ -268,6 +555,14 @@ function startTaskAsync(model, modelId, task, cwd, toolName) {
     result: null,
     timeoutMs,
   });
+
+  if (logger) {
+    logger.info("steps", "job_started", {
+      jobId,
+      toolName,
+      timeoutMs,
+    });
+  }
 
   const cliConfig = CLI_CONFIG[model];
   const args = [...cliConfig.baseArgs, task];
@@ -301,6 +596,14 @@ function startTaskAsync(model, modelId, task, cwd, toolName) {
         timedOut: true,
       });
 
+      if (logger) {
+        logger.warn("steps", "job_timed_out", {
+          jobId,
+          toolName,
+          timeoutMs,
+        });
+      }
+
       if (typeof subprocess.kill === "function") {
         subprocess.kill("SIGTERM");
         setTimeout(() => {
@@ -328,6 +631,16 @@ function startTaskAsync(model, modelId, task, cwd, toolName) {
       completedAt: new Date().toISOString(),
       result,
     });
+
+    if (logger) {
+      const level = status === "completed" ? "info" : "warn";
+      logger[level]("steps", "job_finished", {
+        jobId,
+        toolName,
+        status,
+        exitCode: result?.exitCode,
+      });
+    }
   };
 
   subprocess.then(({ exitCode, stdout, stderr }) => {
@@ -395,13 +708,20 @@ function createHandshakeSummary(config, serverName) {
   };
 }
 
-function registerConfiguredTools(server, config, promptPrefix, serverAsync) {
+function registerConfiguredTools(server, config, promptPrefix, serverAsync, logger) {
   let hasAsyncTools = false;
 
   config.tools.forEach(tool => {
     const inputSchema = buildInputSchema(tool.inputs);
     const toolPromptTemplate = loadToolPrompt(tool);
     const toolAsync = resolveToolAsyncFlag(tool, serverAsync);
+
+    if (logger) {
+      logger.info("steps", "tool_registered", {
+        toolName: tool.name,
+        async: toolAsync,
+      });
+    }
 
     if (toolAsync) {
       hasAsyncTools = true;
@@ -412,7 +732,20 @@ function registerConfiguredTools(server, config, promptPrefix, serverAsync) {
       }, (params) => {
         const { cwd, ...toolParams } = params;
         const fullTask = buildTaskPrompt(tool, toolPromptTemplate, toolParams, promptPrefix);
-        const jobId = startTaskAsync(config.model, config.modelId, fullTask, cwd, tool.name);
+        if (logger) {
+          const requestMeta = buildRequestMeta(tool.name, toolAsync, toolParams, fullTask, promptPrefix);
+          const payload = logger.shouldLogPayloads()
+            ? maybeTruncatePayload({ params: toolParams, task: fullTask }, logger.config.payloadMaxChars)
+            : undefined;
+          logger.info("requests", "tool_request", requestMeta, payload);
+        }
+
+        const jobId = startTaskAsync(config.model, config.modelId, fullTask, cwd, tool.name, logger);
+        if (logger) {
+          const responseMeta = buildResponseMeta(tool.name, toolAsync, null, 0, jobId);
+          logger.info("responses", "tool_response", responseMeta);
+        }
+
         const structuredContent = {
           jobId,
           status: "running",
@@ -432,7 +765,23 @@ function registerConfiguredTools(server, config, promptPrefix, serverAsync) {
       }, async (params) => {
         const { cwd, ...toolParams } = params;
         const fullTask = buildTaskPrompt(tool, toolPromptTemplate, toolParams, promptPrefix);
+        const startTime = Date.now();
+        if (logger) {
+          const requestMeta = buildRequestMeta(tool.name, toolAsync, toolParams, fullTask, promptPrefix);
+          const payload = logger.shouldLogPayloads()
+            ? maybeTruncatePayload({ params: toolParams, task: fullTask }, logger.config.payloadMaxChars)
+            : undefined;
+          logger.info("requests", "tool_request", requestMeta, payload);
+        }
         const result = await executeTask(config.model, config.modelId, fullTask, cwd);
+        if (logger) {
+          const durationMs = Date.now() - startTime;
+          const responseMeta = buildResponseMeta(tool.name, toolAsync, result, durationMs);
+          const payload = logger.shouldLogPayloads()
+            ? maybeTruncatePayload({ stdout: result.stdout ?? "", stderr: result.stderr ?? "" }, logger.config.payloadMaxChars)
+            : undefined;
+          logger.info("responses", "tool_response", responseMeta, payload);
+        }
         return {
           content: [{ type: "text", text: `stdout: ${result.stdout}\nstderr: ${result.stderr}` }],
           structuredContent: result,
@@ -449,9 +798,11 @@ function registerConfiguredTools(server, config, promptPrefix, serverAsync) {
  * The main function to set up and start the MCP server.
  */
 async function main() {
-  const { configPath, promptArg, asyncArg, handshakeAndExitArg } = parseCliArgs();
+  const { configPath, promptArg, asyncArg, handshakeAndExitArg, loggingArgs, logDisabled } = parseCliArgs();
   const validatedConfig = loadConfig(configPath);
   const promptPrefix = loadPromptPrefix(promptArg);
+  const loggingConfig = resolveLoggingConfig(validatedConfig.logging, loggingArgs, logDisabled);
+  const logger = createLogger(loggingConfig);
 
   const serverName = validatedConfig.name || basename(configPath, ".json") + "-mcp-server";
 
@@ -460,7 +811,15 @@ async function main() {
     version: packageVersion ?? "0.0.0",
   });
 
-  const hasAsyncTools = registerConfiguredTools(server, validatedConfig, promptPrefix, asyncArg);
+  if (logger) {
+    logger.info("steps", "server_start", {
+      serverName,
+      version: packageVersion ?? "0.0.0",
+      asyncDefault: asyncArg,
+    });
+  }
+
+  const hasAsyncTools = registerConfiguredTools(server, validatedConfig, promptPrefix, asyncArg, logger);
 
   if (hasAsyncTools) {
     server.registerTool("check-job-status", {
@@ -479,6 +838,20 @@ async function main() {
         }).nullish(),
       }
     }, async ({ jobId }) => {
+      if (logger) {
+        const requestMeta = {
+          toolName: "check-job-status",
+          async: false,
+          paramsChars: countChars({ jobId }),
+          taskChars: 0,
+          hasPromptPrefix: false,
+        };
+        const payload = logger.shouldLogPayloads()
+          ? maybeTruncatePayload({ jobId }, logger.config.payloadMaxChars)
+          : undefined;
+        logger.info("requests", "tool_request", requestMeta, payload);
+      }
+
       const job = jobs.get(jobId);
 
       if (!job) {
@@ -510,6 +883,29 @@ async function main() {
         textContent = `Job ${jobId} ${job.status} (completed: ${job.completedAt})\n\nstdout: ${job.result?.stdout ?? ""}\nstderr: ${job.result?.stderr ?? ""}`;
       }
 
+      if (logger) {
+        const responseMeta = {
+          toolName: "check-job-status",
+          async: false,
+          status: job.status,
+          jobId,
+          exitCode: job.result?.exitCode,
+          stdoutChars: countChars(job.result?.stdout ?? ""),
+          stderrChars: countChars(job.result?.stderr ?? ""),
+        };
+        const payload = logger.shouldLogPayloads()
+          ? maybeTruncatePayload({
+            status: job.status,
+            result: job.result ? {
+              exitCode: job.result.exitCode,
+              stdout: job.result.stdout ?? "",
+              stderr: job.result.stderr ?? "",
+            } : null
+          }, logger.config.payloadMaxChars)
+          : undefined;
+        logger.info("responses", "tool_response", responseMeta, payload);
+      }
+
       return {
         content: [{ type: "text", text: textContent }],
         structuredContent,
@@ -526,6 +922,9 @@ async function main() {
     // Print handshake to stdout so tests/clients can parse it.
     console.log(JSON.stringify(handshake));
     console.error('Exiting after handshake');
+    if (logger) {
+      logger.info("steps", "handshake_exit", { serverName });
+    }
     setTimeout(() => process.exit(0), 50);
   }
 }
@@ -551,12 +950,15 @@ if (process.env.NODE_ENV === 'test') {
     loadPromptPrefix,
     substitutePromptVariables,
     buildTaskPrompt,
+    resolveLoggingConfig,
+    normalizeLogCategories,
     resolveToolAsyncFlag,
     executeTask,
     startTaskAsync,
     createHandshakeSummary,
     registerConfiguredTools,
     resolveJobTimeoutMs,
+    createLogger,
     jobs
   };
 }
