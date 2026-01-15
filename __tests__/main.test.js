@@ -137,6 +137,63 @@ describe('registerConfiguredTools', () => {
     expect(asyncToolCall[1].outputSchema).toHaveProperty('jobId');
     expect(asyncToolCall[1].description).toContain('runs asynchronously');
   });
+
+  it('should truncate logged payloads when payloadMaxChars is set', async () => {
+    const originalWrite = process.stdout.write;
+    const writes = [];
+    process.stdout.write = (chunk) => {
+      writes.push(String(chunk));
+      return true;
+    };
+
+    const server = { registerTool: jest.fn() };
+    const config = {
+      model: 'gemini',
+      tools: [
+        { name: 'sync-tool', description: 'sync tool', inputs: [{ name: 'query', type: 'string' }], async: false }
+      ]
+    };
+    const loggingConfig = {
+      enabled: true,
+      level: 'info',
+      format: 'json',
+      destination: 'stdout',
+      categories: ['requests', 'responses', 'steps'],
+      logPayloads: true,
+      payloadMaxChars: 10,
+    };
+
+    try {
+      registerConfiguredTools(server, config, null, false, loggingConfig, new Map(), 'test-server');
+      const syncToolCall = server.registerTool.mock.calls.find(call => call[0] === 'sync-tool');
+      await syncToolCall[2]({ query: 'abcdefghijklmnopqrstuvwxyz' });
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+
+    const requestLine = writes.find(line => line.includes('"category":"requests"') && line.includes('"message":"tool_request"'));
+    expect(requestLine).toBeDefined();
+    const entry = JSON.parse(requestLine.trim());
+    expect(entry.payload).toBeDefined();
+    expect(entry.payload.length).toBeLessThanOrEqual(13);
+    expect(entry.payload.endsWith('...')).toBe(true);
+  });
+});
+
+describe('resolveJobTimeoutMs', () => {
+  it('should return default when env value is invalid', () => {
+    process.env.DYNAMIC_MCP_JOB_TIMEOUT_MS = 'not-a-number';
+    const timeout = resolveJobTimeoutMs();
+    expect(timeout).toBeGreaterThan(0);
+    delete process.env.DYNAMIC_MCP_JOB_TIMEOUT_MS;
+  });
+
+  it('should return env timeout when valid', () => {
+    process.env.DYNAMIC_MCP_JOB_TIMEOUT_MS = '1234';
+    const timeout = resolveJobTimeoutMs();
+    expect(timeout).toBe(1234);
+    delete process.env.DYNAMIC_MCP_JOB_TIMEOUT_MS;
+  });
 });
 
 describe('loadPromptPrefix', () => {
