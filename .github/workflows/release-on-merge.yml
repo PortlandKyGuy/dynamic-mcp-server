@@ -30,6 +30,12 @@ jobs:
           if echo "$labels" | grep -q "major"; then bump=major; fi
           if echo "$labels" | grep -q "minor"; then bump=minor; fi
           if echo "$labels" | grep -q "patch"; then bump=patch; fi
+          if [ "$labels" = "" ]; then
+            pr_title=$(node -e "const fs=require('fs');const e=JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH,'utf8'));console.log((e.pull_request.title||'').toLowerCase());")
+            if echo "$pr_title" | grep -q "breaking"; then bump=major; fi
+            if echo "$pr_title" | grep -q "^feat"; then bump=minor; fi
+            if echo "$pr_title" | grep -q "^fix"; then bump=patch; fi
+          fi
           echo "bump=$bump" >> "$GITHUB_OUTPUT"
 
       - name: Bump version and update changelog
