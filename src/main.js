@@ -313,7 +313,7 @@ function maybeTruncatePayload(payload, maxChars) {
   return truncateString(safeStringify(payload), maxChars);
 }
 
-function createLogger(loggingConfig, streamRegistry) {
+function createLogger(loggingConfig, streamRegistry, baseMeta = {}) {
   const config = { ...DEFAULT_LOGGING, ...loggingConfig };
   const levelValue = LOG_LEVELS[config.level] ?? LOG_LEVELS.info;
   const categorySet = new Set(config.categories || []);
@@ -363,10 +363,11 @@ function createLogger(loggingConfig, streamRegistry) {
 
   const formatLine = (level, category, message, meta, payload) => {
     const timestamp = new Date().toISOString();
+    const mergedMeta = { ...baseMeta, ...(meta || {}) };
     if (config.format === "pretty") {
       let line = `[${timestamp}] ${level.toUpperCase()} ${category} ${message}`;
-      if (meta && Object.keys(meta).length > 0) {
-        line += ` ${safeStringify(meta)}`;
+      if (Object.keys(mergedMeta).length > 0) {
+        line += ` ${safeStringify(mergedMeta)}`;
       }
       if (payload !== undefined) {
         line += ` payload=${safeStringify(payload)}`;
@@ -378,7 +379,7 @@ function createLogger(loggingConfig, streamRegistry) {
       level,
       category,
       message,
-      ...meta,
+      ...mergedMeta,
     };
     if (payload !== undefined) {
       entry.payload = payload;
@@ -739,12 +740,12 @@ function createHandshakeSummary(config, serverName) {
   };
 }
 
-function registerConfiguredTools(server, config, promptPrefix, serverAsync, loggingConfig, streamRegistry) {
+function registerConfiguredTools(server, config, promptPrefix, serverAsync, loggingConfig, streamRegistry, serverName) {
   let hasAsyncTools = false;
 
   config.tools.forEach(tool => {
     const toolLoggingConfig = resolveToolLoggingConfig(loggingConfig, tool.logging);
-    const toolLogger = createLogger(toolLoggingConfig, streamRegistry);
+    const toolLogger = createLogger(toolLoggingConfig, streamRegistry, { serverName });
     const inputSchema = buildInputSchema(tool.inputs);
     const toolPromptTemplate = loadToolPrompt(tool);
     const toolAsync = resolveToolAsyncFlag(tool, serverAsync);
@@ -836,9 +837,21 @@ async function main() {
   const promptPrefix = loadPromptPrefix(promptArg);
   const loggingConfig = resolveLoggingConfig(validatedConfig.logging, loggingArgs, logDisabled);
   const streamRegistry = new Map();
-  const logger = createLogger(loggingConfig, streamRegistry);
+  let didShutdown = false;
+  const shutdown = (reason) => {
+    if (didShutdown) return;
+    didShutdown = true;
+    if (logger) {
+      logger.info("steps", "server_shutdown", { reason });
+    }
+    process.exit(0);
+  };
+
+  process.stdin.on("close", () => shutdown("stdin_closed"));
+  process.stdin.on("end", () => shutdown("stdin_ended"));
 
   const serverName = validatedConfig.name || basename(configPath, ".json") + "-mcp-server";
+  const logger = createLogger(loggingConfig, streamRegistry, { serverName });
 
   const server = new McpServer({
     name: serverName,
@@ -853,7 +866,7 @@ async function main() {
     });
   }
 
-  const hasAsyncTools = registerConfiguredTools(server, validatedConfig, promptPrefix, asyncArg, loggingConfig, streamRegistry);
+  const hasAsyncTools = registerConfiguredTools(server, validatedConfig, promptPrefix, asyncArg, loggingConfig, streamRegistry, serverName);
 
   if (hasAsyncTools) {
     server.registerTool("check-job-status", {

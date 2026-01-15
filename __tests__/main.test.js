@@ -1,4 +1,4 @@
-const { parseCliArgs, loadConfig, loadPromptPrefix, substitutePromptVariables, buildTaskPrompt, resolveLoggingConfig, resolveToolLoggingConfig, normalizeLogCategories, resolveToolAsyncFlag, executeTask, startTaskAsync, createHandshakeSummary, registerConfiguredTools, resolveJobTimeoutMs, jobs } = require('../src/main');
+const { parseCliArgs, loadConfig, loadPromptPrefix, substitutePromptVariables, buildTaskPrompt, resolveLoggingConfig, resolveToolLoggingConfig, normalizeLogCategories, resolveToolAsyncFlag, executeTask, startTaskAsync, createHandshakeSummary, registerConfiguredTools, resolveJobTimeoutMs, createLogger, jobs } = require('../src/main');
 const fs = require('fs');
 const { resolve } = require('path');
 const execa = require('execa');
@@ -340,5 +340,35 @@ describe('normalizeLogCategories', () => {
   it('should expand all categories', () => {
     const categories = normalizeLogCategories('all');
     expect(categories).toEqual(expect.arrayContaining(['requests', 'responses', 'steps']));
+  });
+});
+
+describe('createLogger', () => {
+  it('should include serverName in log entries', () => {
+    const originalWrite = process.stdout.write;
+    const writes = [];
+    process.stdout.write = (chunk) => {
+      writes.push(String(chunk));
+      return true;
+    };
+
+    try {
+      const logger = createLogger(
+        { level: 'info', format: 'json', destination: 'stdout', categories: ['requests'] },
+        new Map(),
+        { serverName: 'test-server' }
+      );
+      logger.info('requests', 'tool_request', { foo: 'bar' });
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+
+    expect(writes.length).toBeGreaterThan(0);
+    const line = writes[0].trim();
+    const entry = JSON.parse(line);
+    expect(entry.serverName).toBe('test-server');
+    expect(entry.foo).toBe('bar');
+    expect(entry.category).toBe('requests');
+    expect(entry.message).toBe('tool_request');
   });
 });
