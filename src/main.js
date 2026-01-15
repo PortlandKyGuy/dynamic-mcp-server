@@ -272,6 +272,14 @@ function resolveLoggingConfig(configLogging, cliLogging, logDisabled, env = proc
   return { ...resolved, disabledByCli };
 }
 
+function shouldWarnPayloadMaxChars(loggingConfig) {
+  if (!loggingConfig || loggingConfig.enabled === false) return false;
+  if (!Number.isFinite(loggingConfig.payloadMaxChars) || loggingConfig.payloadMaxChars <= 0) return false;
+  const levelValue = LOG_LEVELS[loggingConfig.level] ?? LOG_LEVELS.info;
+  const payloadsEnabled = Boolean(loggingConfig.logPayloads) || levelValue >= LOG_LEVELS.debug;
+  return !payloadsEnabled;
+}
+
 function resolveToolLoggingConfig(baseConfig, toolLogging) {
   if (!baseConfig) return baseConfig;
   if (baseConfig.disabledByCli) {
@@ -850,6 +858,10 @@ async function main() {
   process.stdin.on("close", () => shutdown("stdin_closed"));
   process.stdin.on("end", () => shutdown("stdin_ended"));
 
+  if (shouldWarnPayloadMaxChars(loggingConfig)) {
+    console.warn("Warning: payloadMaxChars is set but payload logging is disabled. Enable --log-payloads or set log level to debug/trace to include payloads.");
+  }
+
   const serverName = validatedConfig.name || basename(configPath, ".json") + "-mcp-server";
   const logger = createLogger(loggingConfig, streamRegistry, { serverName });
 
@@ -998,6 +1010,7 @@ if (process.env.NODE_ENV === 'test') {
     substitutePromptVariables,
     buildTaskPrompt,
     resolveLoggingConfig,
+    shouldWarnPayloadMaxChars,
     resolveToolLoggingConfig,
     normalizeLogCategories,
     resolveToolAsyncFlag,

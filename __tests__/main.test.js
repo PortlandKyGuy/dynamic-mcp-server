@@ -1,4 +1,4 @@
-const { parseCliArgs, loadConfig, loadPromptPrefix, substitutePromptVariables, buildTaskPrompt, resolveLoggingConfig, resolveToolLoggingConfig, normalizeLogCategories, resolveToolAsyncFlag, executeTask, startTaskAsync, createHandshakeSummary, registerConfiguredTools, resolveJobTimeoutMs, createLogger, jobs } = require('../src/main');
+const { parseCliArgs, loadConfig, loadPromptPrefix, substitutePromptVariables, buildTaskPrompt, resolveLoggingConfig, shouldWarnPayloadMaxChars, resolveToolLoggingConfig, normalizeLogCategories, resolveToolAsyncFlag, executeTask, startTaskAsync, createHandshakeSummary, registerConfiguredTools, resolveJobTimeoutMs, createLogger, jobs } = require('../src/main');
 const fs = require('fs');
 const { resolve } = require('path');
 const execa = require('execa');
@@ -193,6 +193,38 @@ describe('resolveJobTimeoutMs', () => {
     const timeout = resolveJobTimeoutMs();
     expect(timeout).toBe(1234);
     delete process.env.DYNAMIC_MCP_JOB_TIMEOUT_MS;
+  });
+});
+
+describe('shouldWarnPayloadMaxChars', () => {
+  it('should warn when payloadMaxChars is set but payload logging is disabled', () => {
+    const shouldWarn = shouldWarnPayloadMaxChars({
+      enabled: true,
+      level: 'info',
+      logPayloads: false,
+      payloadMaxChars: 10,
+    });
+    expect(shouldWarn).toBe(true);
+  });
+
+  it('should not warn when payload logging is enabled', () => {
+    const shouldWarn = shouldWarnPayloadMaxChars({
+      enabled: true,
+      level: 'info',
+      logPayloads: true,
+      payloadMaxChars: 10,
+    });
+    expect(shouldWarn).toBe(false);
+  });
+
+  it('should not warn when log level includes payloads', () => {
+    const shouldWarn = shouldWarnPayloadMaxChars({
+      enabled: true,
+      level: 'debug',
+      logPayloads: false,
+      payloadMaxChars: 10,
+    });
+    expect(shouldWarn).toBe(false);
   });
 });
 
