@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 - PR #8: Automate version bumps on merge
 
 ## 1.5.1 - 2026-01-15
-- Update MCP SDK and override transitive dependencies to resolve security advisories.
+- Update MCP SDK to resolve security advisories (no overrides required).
 
 ## 1.5.0 - 2026-01-15
 - Add `serverName` to all log entries for easier multi-server tracing.
