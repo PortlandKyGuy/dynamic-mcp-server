@@ -284,6 +284,48 @@ describe('parseCliArgs', () => {
     expect(process.exit).toHaveBeenCalledWith(1);
     expect(console.error).toHaveBeenCalledWith('Error: --prompt requires a value (string or file path)');
   });
+
+  it('should exit with an error if --log-level is used without a value', () => {
+    process.argv.push('--config', 'config.json', '--log-level');
+    parseCliArgs();
+    expect(process.exit).toHaveBeenCalledWith(1);
+    expect(console.error).toHaveBeenCalledWith('Error: --log-level requires a value');
+  });
+
+  it('should exit with an error if --log-format is used without a value', () => {
+    process.argv.push('--config', 'config.json', '--log-format');
+    parseCliArgs();
+    expect(process.exit).toHaveBeenCalledWith(1);
+    expect(console.error).toHaveBeenCalledWith('Error: --log-format requires a value');
+  });
+
+  it('should exit with an error if --log-destination is used without a value', () => {
+    process.argv.push('--config', 'config.json', '--log-destination');
+    parseCliArgs();
+    expect(process.exit).toHaveBeenCalledWith(1);
+    expect(console.error).toHaveBeenCalledWith('Error: --log-destination requires a value');
+  });
+
+  it('should exit with an error if --log-categories is used without a value', () => {
+    process.argv.push('--config', 'config.json', '--log-categories');
+    parseCliArgs();
+    expect(process.exit).toHaveBeenCalledWith(1);
+    expect(console.error).toHaveBeenCalledWith('Error: --log-categories requires a value');
+  });
+
+  it('should exit with an error if --log-payload-max-chars is used without a value', () => {
+    process.argv.push('--config', 'config.json', '--log-payload-max-chars');
+    parseCliArgs();
+    expect(process.exit).toHaveBeenCalledWith(1);
+    expect(console.error).toHaveBeenCalledWith('Error: --log-payload-max-chars requires a positive integer value');
+  });
+
+  it('should exit with an error if --log-payload-max-chars is not a positive integer', () => {
+    process.argv.push('--config', 'config.json', '--log-payload-max-chars', '0');
+    parseCliArgs();
+    expect(process.exit).toHaveBeenCalledWith(1);
+    expect(console.error).toHaveBeenCalledWith('Error: --log-payload-max-chars requires a positive integer value');
+  });
 });
 
 describe('resolveLoggingConfig', () => {
@@ -315,6 +357,22 @@ describe('resolveLoggingConfig', () => {
     const resolved = resolveLoggingConfig({ level: 'info' }, {}, true, {});
     expect(resolved.enabled).toBe(false);
   });
+
+  it('should disable logging when level is off', () => {
+    const resolved = resolveLoggingConfig({ level: 'off' }, {}, false, {});
+    expect(resolved.enabled).toBe(false);
+  });
+
+  it('should treat invalid env overrides as undefined', () => {
+    const resolved = resolveLoggingConfig({}, {}, false, {
+      DYNAMIC_MCP_LOG_LEVEL: 'not-a-level',
+      DYNAMIC_MCP_LOG_FORMAT: 'xml',
+      DYNAMIC_MCP_LOG_CATEGORIES: 'bogus',
+    });
+    expect(resolved.level).toBe('info');
+    expect(resolved.format).toBe('json');
+    expect(resolved.categories).toEqual(expect.arrayContaining(['requests', 'responses', 'steps']));
+  });
 });
 
 describe('resolveToolLoggingConfig', () => {
@@ -329,6 +387,19 @@ describe('resolveToolLoggingConfig', () => {
     const base = resolveLoggingConfig({ level: 'info' }, {}, true, {});
     const resolved = resolveToolLoggingConfig(base, { level: 'debug', enabled: true });
     expect(resolved.enabled).toBe(false);
+  });
+
+  it('should disable tool logging when level is off', () => {
+    const base = resolveLoggingConfig({ level: 'info' }, {}, false, {});
+    const resolved = resolveToolLoggingConfig(base, { level: 'off', enabled: true });
+    expect(resolved.enabled).toBe(false);
+  });
+
+  it('should allow tool-level enabled to override base enabled when not disabled by CLI', () => {
+    const base = resolveLoggingConfig({ level: 'info', enabled: false }, {}, false, {});
+    const resolved = resolveToolLoggingConfig(base, { enabled: true, categories: ['steps'] });
+    expect(resolved.enabled).toBe(true);
+    expect(resolved.categories).toEqual(['steps']);
   });
 });
 
