@@ -5,6 +5,9 @@ All notable changes to this project will be documented in this file.
 ## 1.5.1 - 2026-01-15
 - PR #8: Automate version bumps on merge
 
+## 1.5.2 - 2026-01-15
+- Patch release to roll up dependency security updates without overrides.
+
 ## 1.5.1 - 2026-01-15
 - Update MCP SDK to resolve security advisories (no overrides required).
 
