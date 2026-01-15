@@ -1,4 +1,4 @@
-const { parseCliArgs, loadConfig, loadPromptPrefix, substitutePromptVariables, buildTaskPrompt, resolveToolAsyncFlag, executeTask, startTaskAsync, createHandshakeSummary, registerConfiguredTools, resolveJobTimeoutMs, jobs } = require('../src/main');
+const { parseCliArgs, loadConfig, loadPromptPrefix, substitutePromptVariables, buildTaskPrompt, resolveLoggingConfig, shouldWarnPayloadMaxChars, resolveToolLoggingConfig, normalizeLogCategories, resolveToolAsyncFlag, executeTask, startTaskAsync, createHandshakeSummary, registerConfiguredTools, resolveJobTimeoutMs, createLogger, jobs } = require('../src/main');
 const fs = require('fs');
 const { resolve } = require('path');
 const execa = require('execa');
@@ -19,12 +19,12 @@ describe('executeTask', () => {
 
 describe('startTaskAsync', () => {
   it('should call execa with the correct command and arguments', () => {
-    startTaskAsync('gemini', 'gemini-pro', 'test prompt', '/test/dir', 'test-tool');
+    startTaskAsync('gemini', 'gemini-pro', 'test prompt', '/test/dir', 'test-tool', null);
     expect(execa).toHaveBeenCalledWith('gemini', ['--model', 'gemini-pro', '-y', '-p', 'test prompt'], expect.any(Object));
   });
 
   it('should return a jobId and store a running job', () => {
-    const jobId = startTaskAsync('gemini', 'gemini-pro', 'test prompt', '/test/dir', 'test-tool');
+    const jobId = startTaskAsync('gemini', 'gemini-pro', 'test prompt', '/test/dir', 'test-tool', null);
     const job = jobs.get(jobId);
     expect(jobId).toMatch(/^job_/);
     expect(job.status).toBe('running');
@@ -39,7 +39,7 @@ describe('startTaskAsync', () => {
     pending.kill = jest.fn();
     execa.mockReturnValueOnce(pending);
 
-    const jobId = startTaskAsync('gemini', 'gemini-pro', 'test prompt', '/test/dir', 'test-tool');
+    const jobId = startTaskAsync('gemini', 'gemini-pro', 'test prompt', '/test/dir', 'test-tool', null);
 
     jest.advanceTimersByTime(11);
 
@@ -123,7 +123,7 @@ describe('registerConfiguredTools', () => {
       ]
     };
 
-    const hasAsyncTools = registerConfiguredTools(server, config, null, true);
+    const hasAsyncTools = registerConfiguredTools(server, config, null, true, null);
 
     expect(hasAsyncTools).toBe(true);
     expect(server.registerTool).toHaveBeenCalledTimes(2);
@@ -136,6 +136,95 @@ describe('registerConfiguredTools', () => {
 
     expect(asyncToolCall[1].outputSchema).toHaveProperty('jobId');
     expect(asyncToolCall[1].description).toContain('runs asynchronously');
+  });
+
+  it('should truncate logged payloads when payloadMaxChars is set', async () => {
+    const originalWrite = process.stdout.write;
+    const writes = [];
+    process.stdout.write = (chunk) => {
+      writes.push(String(chunk));
+      return true;
+    };
+
+    const server = { registerTool: jest.fn() };
+    const config = {
+      model: 'gemini',
+      tools: [
+        { name: 'sync-tool', description: 'sync tool', inputs: [{ name: 'query', type: 'string' }], async: false }
+      ]
+    };
+    const loggingConfig = {
+      enabled: true,
+      level: 'info',
+      format: 'json',
+      destination: 'stdout',
+      categories: ['requests', 'responses', 'steps'],
+      logPayloads: true,
+      payloadMaxChars: 10,
+    };
+
+    try {
+      registerConfiguredTools(server, config, null, false, loggingConfig, new Map(), 'test-server');
+      const syncToolCall = server.registerTool.mock.calls.find(call => call[0] === 'sync-tool');
+      await syncToolCall[2]({ query: 'abcdefghijklmnopqrstuvwxyz' });
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+
+    const requestLine = writes.find(line => line.includes('"category":"requests"') && line.includes('"message":"tool_request"'));
+    expect(requestLine).toBeDefined();
+    const entry = JSON.parse(requestLine.trim());
+    expect(entry.payload).toBeDefined();
+    expect(entry.payload.length).toBeLessThanOrEqual(13);
+    expect(entry.payload.endsWith('...')).toBe(true);
+  });
+});
+
+describe('resolveJobTimeoutMs', () => {
+  it('should return default when env value is invalid', () => {
+    process.env.DYNAMIC_MCP_JOB_TIMEOUT_MS = 'not-a-number';
+    const timeout = resolveJobTimeoutMs();
+    expect(timeout).toBeGreaterThan(0);
+    delete process.env.DYNAMIC_MCP_JOB_TIMEOUT_MS;
+  });
+
+  it('should return env timeout when valid', () => {
+    process.env.DYNAMIC_MCP_JOB_TIMEOUT_MS = '1234';
+    const timeout = resolveJobTimeoutMs();
+    expect(timeout).toBe(1234);
+    delete process.env.DYNAMIC_MCP_JOB_TIMEOUT_MS;
+  });
+});
+
+describe('shouldWarnPayloadMaxChars', () => {
+  it('should warn when payloadMaxChars is set but payload logging is disabled', () => {
+    const shouldWarn = shouldWarnPayloadMaxChars({
+      enabled: true,
+      level: 'info',
+      logPayloads: false,
+      payloadMaxChars: 10,
+    });
+    expect(shouldWarn).toBe(true);
+  });
+
+  it('should not warn when payload logging is enabled', () => {
+    const shouldWarn = shouldWarnPayloadMaxChars({
+      enabled: true,
+      level: 'info',
+      logPayloads: true,
+      payloadMaxChars: 10,
+    });
+    expect(shouldWarn).toBe(false);
+  });
+
+  it('should not warn when log level includes payloads', () => {
+    const shouldWarn = shouldWarnPayloadMaxChars({
+      enabled: true,
+      level: 'debug',
+      logPayloads: false,
+      payloadMaxChars: 10,
+    });
+    expect(shouldWarn).toBe(false);
   });
 });
 
@@ -254,6 +343,23 @@ describe('parseCliArgs', () => {
     expect(asyncArg).toBe(true);
   });
 
+  it('should correctly parse logging flags', () => {
+    process.argv.push('--config', 'config.json', '--log-level', 'debug', '--log-format', 'pretty', '--log-destination', '/tmp/log.txt', '--log-categories', 'requests,steps', '--log-payloads', '--log-payload-max-chars', '2048');
+    const { loggingArgs } = parseCliArgs();
+    expect(loggingArgs.level).toBe('debug');
+    expect(loggingArgs.format).toBe('pretty');
+    expect(loggingArgs.destination).toBe('/tmp/log.txt');
+    expect(loggingArgs.categories).toBe('requests,steps');
+    expect(loggingArgs.logPayloads).toBe(true);
+    expect(loggingArgs.payloadMaxChars).toBe(2048);
+  });
+
+  it('should allow disabling logging', () => {
+    process.argv.push('--config', 'config.json', '--no-logging');
+    const { logDisabled } = parseCliArgs();
+    expect(logDisabled).toBe(true);
+  });
+
   it('should exit with an error if no config file path is provided', () => {
     parseCliArgs();
     expect(process.exit).toHaveBeenCalledWith(1);
@@ -266,5 +372,163 @@ describe('parseCliArgs', () => {
     parseCliArgs();
     expect(process.exit).toHaveBeenCalledWith(1);
     expect(console.error).toHaveBeenCalledWith('Error: --prompt requires a value (string or file path)');
+  });
+
+  it('should exit with an error if --log-level is used without a value', () => {
+    process.argv.push('--config', 'config.json', '--log-level');
+    parseCliArgs();
+    expect(process.exit).toHaveBeenCalledWith(1);
+    expect(console.error).toHaveBeenCalledWith('Error: --log-level requires a value');
+  });
+
+  it('should exit with an error if --log-format is used without a value', () => {
+    process.argv.push('--config', 'config.json', '--log-format');
+    parseCliArgs();
+    expect(process.exit).toHaveBeenCalledWith(1);
+    expect(console.error).toHaveBeenCalledWith('Error: --log-format requires a value');
+  });
+
+  it('should exit with an error if --log-destination is used without a value', () => {
+    process.argv.push('--config', 'config.json', '--log-destination');
+    parseCliArgs();
+    expect(process.exit).toHaveBeenCalledWith(1);
+    expect(console.error).toHaveBeenCalledWith('Error: --log-destination requires a value');
+  });
+
+  it('should exit with an error if --log-categories is used without a value', () => {
+    process.argv.push('--config', 'config.json', '--log-categories');
+    parseCliArgs();
+    expect(process.exit).toHaveBeenCalledWith(1);
+    expect(console.error).toHaveBeenCalledWith('Error: --log-categories requires a value');
+  });
+
+  it('should exit with an error if --log-payload-max-chars is used without a value', () => {
+    process.argv.push('--config', 'config.json', '--log-payload-max-chars');
+    parseCliArgs();
+    expect(process.exit).toHaveBeenCalledWith(1);
+    expect(console.error).toHaveBeenCalledWith('Error: --log-payload-max-chars requires a positive integer value');
+  });
+
+  it('should exit with an error if --log-payload-max-chars is not a positive integer', () => {
+    process.argv.push('--config', 'config.json', '--log-payload-max-chars', '0');
+    parseCliArgs();
+    expect(process.exit).toHaveBeenCalledWith(1);
+    expect(console.error).toHaveBeenCalledWith('Error: --log-payload-max-chars requires a positive integer value');
+  });
+});
+
+describe('resolveLoggingConfig', () => {
+  const originalEnv = process.env;
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  it('should apply defaults when no overrides are provided', () => {
+    const resolved = resolveLoggingConfig(undefined, {}, false, {});
+    expect(resolved.enabled).toBe(true);
+    expect(resolved.level).toBe('info');
+    expect(resolved.destination).toBe('stderr');
+    expect(resolved.format).toBe('json');
+    expect(resolved.categories).toEqual(expect.arrayContaining(['requests', 'responses', 'steps']));
+  });
+
+  it('should apply precedence cli > env > config', () => {
+    process.env = {
+      ...originalEnv,
+      DYNAMIC_MCP_LOG_LEVEL: 'warn',
+    };
+    const resolved = resolveLoggingConfig({ level: 'info' }, { level: 'debug' }, false, process.env);
+    expect(resolved.level).toBe('debug');
+  });
+
+  it('should disable logging when --no-logging is used', () => {
+    const resolved = resolveLoggingConfig({ level: 'info' }, {}, true, {});
+    expect(resolved.enabled).toBe(false);
+  });
+
+  it('should disable logging when level is off', () => {
+    const resolved = resolveLoggingConfig({ level: 'off' }, {}, false, {});
+    expect(resolved.enabled).toBe(false);
+  });
+
+  it('should treat invalid env overrides as undefined', () => {
+    const resolved = resolveLoggingConfig({}, {}, false, {
+      DYNAMIC_MCP_LOG_LEVEL: 'not-a-level',
+      DYNAMIC_MCP_LOG_FORMAT: 'xml',
+      DYNAMIC_MCP_LOG_CATEGORIES: 'bogus',
+    });
+    expect(resolved.level).toBe('info');
+    expect(resolved.format).toBe('json');
+    expect(resolved.categories).toEqual(expect.arrayContaining(['requests', 'responses', 'steps']));
+  });
+});
+
+describe('resolveToolLoggingConfig', () => {
+  it('should allow tool-level overrides', () => {
+    const base = resolveLoggingConfig({ level: 'info' }, {}, false, {});
+    const resolved = resolveToolLoggingConfig(base, { level: 'debug', categories: ['steps'] });
+    expect(resolved.level).toBe('debug');
+    expect(resolved.categories).toEqual(['steps']);
+  });
+
+  it('should respect CLI disable', () => {
+    const base = resolveLoggingConfig({ level: 'info' }, {}, true, {});
+    const resolved = resolveToolLoggingConfig(base, { level: 'debug', enabled: true });
+    expect(resolved.enabled).toBe(false);
+  });
+
+  it('should disable tool logging when level is off', () => {
+    const base = resolveLoggingConfig({ level: 'info' }, {}, false, {});
+    const resolved = resolveToolLoggingConfig(base, { level: 'off', enabled: true });
+    expect(resolved.enabled).toBe(false);
+  });
+
+  it('should allow tool-level enabled to override base enabled when not disabled by CLI', () => {
+    const base = resolveLoggingConfig({ level: 'info', enabled: false }, {}, false, {});
+    const resolved = resolveToolLoggingConfig(base, { enabled: true, categories: ['steps'] });
+    expect(resolved.enabled).toBe(true);
+    expect(resolved.categories).toEqual(['steps']);
+  });
+});
+
+describe('normalizeLogCategories', () => {
+  it('should normalize comma-separated categories', () => {
+    expect(normalizeLogCategories('requests, steps')).toEqual(['requests', 'steps']);
+  });
+
+  it('should expand all categories', () => {
+    const categories = normalizeLogCategories('all');
+    expect(categories).toEqual(expect.arrayContaining(['requests', 'responses', 'steps']));
+  });
+});
+
+describe('createLogger', () => {
+  it('should include serverName in log entries', () => {
+    const originalWrite = process.stdout.write;
+    const writes = [];
+    process.stdout.write = (chunk) => {
+      writes.push(String(chunk));
+      return true;
+    };
+
+    try {
+      const logger = createLogger(
+        { level: 'info', format: 'json', destination: 'stdout', categories: ['requests'] },
+        new Map(),
+        { serverName: 'test-server' }
+      );
+      logger.info('requests', 'tool_request', { foo: 'bar' });
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+
+    expect(writes.length).toBeGreaterThan(0);
+    const line = writes[0].trim();
+    const entry = JSON.parse(line);
+    expect(entry.serverName).toBe('test-server');
+    expect(entry.foo).toBe('bar');
+    expect(entry.category).toBe('requests');
+    expect(entry.message).toBe('tool_request');
   });
 });

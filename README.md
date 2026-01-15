@@ -84,6 +84,7 @@ The server is configured using a JSON file. This file can be located anywhere on
 | `name` | No | Server name (defaults to config filename) |
 | `model` | Yes | CLI to use: `"claude"`, `"codex"`, or `"gemini"` |
 | `modelId` | No | Specific model ID to pass to the CLI (e.g., `"claude-sonnet-4-20250514"`) |
+| `logging` | No | Optional logging configuration (see Logging section) |
 | `tools` | Yes | Array of tool definitions |
 
 ### Tool Definition
@@ -95,7 +96,10 @@ The server is configured using a JSON file. This file can be located anywhere on
 | `prompt` | No | Prompt template with `{{variable}}` placeholders |
 | `promptFile` | No | Path to a file containing the prompt template (takes precedence over `prompt`) |
 | `async` | No | Run this tool asynchronously. Overrides the server-level `--async` default. |
+| `logging` | No | Optional per-tool logging overrides (same fields as server logging; see Logging section) |
 | `inputs` | No | Array of input parameters |
+
+Per-tool logging overrides are applied on top of server-level logging. CLI flags still take precedence over everything.
 | `command` / `args` | No | Optional; currently not executed by the server. The model prompt drives the CLI call. Extend `src/main.js` if you want per-tool shell commands. |
 
 #### How Tool Arguments Become the Final Prompt
@@ -118,6 +122,49 @@ When a tool is invoked, the server builds a single prompt string that is passed 
 | `required` | No | Whether required (defaults to `true`) |
 
 See the `examples/` folder for sample configurations.
+
+### Logging
+
+Logging is enabled by default at `info` level and writes to `stderr`. Configuration precedence is: CLI flags > environment variables > config file > defaults.
+
+When `format` is `json`, each log entry includes `serverName` so you can distinguish logs from multiple MCP server instances.
+
+Example config:
+
+```json
+{
+  "logging": {
+    "level": "info",
+    "format": "json",
+    "destination": "stderr",
+    "categories": ["requests", "responses", "steps"],
+    "logPayloads": false,
+    "payloadMaxChars": 2048
+  }
+}
+```
+
+Logging fields:
+
+| Field | Description |
+|-------|-------------|
+| `enabled` | Enable/disable logging (default: true) |
+| `level` | `error`, `warn`, `info`, `debug`, `trace` (default: `info`) |
+| `format` | `json` or `pretty` (default: `json`) |
+| `destination` | `stderr` (default) or file path |
+| `categories` | `requests`, `responses`, `steps` or `all` |
+| `logPayloads` | Include full request/response payloads (default: false) |
+| `payloadMaxChars` | Optional max chars for payload logs |
+
+Environment variables:
+
+- `DYNAMIC_MCP_LOG_ENABLED`
+- `DYNAMIC_MCP_LOG_LEVEL`
+- `DYNAMIC_MCP_LOG_FORMAT`
+- `DYNAMIC_MCP_LOG_DESTINATION`
+- `DYNAMIC_MCP_LOG_CATEGORIES`
+- `DYNAMIC_MCP_LOG_PAYLOADS_ENABLED`
+- `DYNAMIC_MCP_LOG_PAYLOAD_MAX_CHARS`
 
 ---
 
@@ -145,6 +192,15 @@ MCP Clients are your Codex, Claude, Gemini CLIs. These settings tell your CLI wh
 |--------|-------------|
 | `--config <path>` | Path to the JSON configuration file (required) |
 | `--prompt`, `-p <value>` | A prompt string or path to a prompt file. If provided, this prompt is prepended to every task with a newline separator. If the value is a valid file path, its contents are used. |
+| `--async` | Run tools asynchronously by default |
+| `--handshake-and-exit` | Print handshake JSON and exit |
+| `--log-level <level>` | Logging level (`error`, `warn`, `info`, `debug`, `trace`, `off`) |
+| `--log-format <format>` | Logging format (`json` or `pretty`) |
+| `--log-destination <dest>` | `stderr` or file path |
+| `--log-categories <list>` | Comma-separated list or `all` |
+| `--log-payloads` | Enable full request/response payload logging |
+| `--log-payload-max-chars <chars>` | Truncate payload logs to max char count |
+| `--no-logging` | Disable logging |
 
 ### Prompt Prefix
 
