@@ -127,6 +127,8 @@ See the `examples/` folder for sample configurations.
 
 Logging is enabled by default at `info` level and writes to `stderr`. Configuration precedence is: CLI flags > environment variables > config file > defaults.
 
+When `format` is `json`, each log entry includes `serverName` so you can distinguish logs from multiple MCP server instances.
+
 Example config:
 
 ```json
