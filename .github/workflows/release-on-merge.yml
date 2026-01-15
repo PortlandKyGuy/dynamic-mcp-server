@@ -1,0 +1,55 @@
+name: Bump Version and Changelog
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  bump:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Determine bump type
+        id: bump
+        run: |
+          labels=$(node -e "const fs=require('fs');const e=JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH,'utf8'));console.log((e.pull_request.labels||[]).map(l=>l.name.toLowerCase()).join(','));")
+          bump=patch
+          if echo "$labels" | grep -q "major"; then bump=major; fi
+          if echo "$labels" | grep -q "minor"; then bump=minor; fi
+          if echo "$labels" | grep -q "patch"; then bump=patch; fi
+          if [ "$labels" = "" ]; then
+            pr_title=$(node -e "const fs=require('fs');const e=JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH,'utf8'));console.log((e.pull_request.title||'').toLowerCase());")
+            if echo "$pr_title" | grep -q "breaking"; then bump=major; fi
+            if echo "$pr_title" | grep -q "^feat"; then bump=minor; fi
+            if echo "$pr_title" | grep -q "^fix"; then bump=patch; fi
+          fi
+          echo "bump=$bump" >> "$GITHUB_OUTPUT"
+
+      - name: Bump version and update changelog
+        run: |
+          node scripts/bump-version-and-changelog.js "${{ steps.bump.outputs.bump }}" "${{ github.event.pull_request.title }}" "${{ github.event.pull_request.number }}"
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json CHANGELOG.md
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "chore(release): bump version after #${{ github.event.pull_request.number }}"
+          git push

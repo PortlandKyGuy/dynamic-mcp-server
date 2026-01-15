@@ -182,6 +182,8 @@ npm install -g .
 
 This makes the `dynamic-mcp-server` command available on your PATH. In your MCP client configs (Claude, Codex, Gemini), set the server command to `dynamic-mcp-server` and pass your JSON config path with the `--config` flag (plus any flags like `--async` or `--prompt`).
 
+For contribution and release process details, see `CONTRIBUTING.md`.
+
 ### MCP Client Configuration
 
 MCP Clients are your Codex, Claude, Gemini CLIs. These settings tell your CLI what is available and how to use the dynamic-mcp-servers you created.
