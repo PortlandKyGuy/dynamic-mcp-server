@@ -2,6 +2,9 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.5.1 - 2026-01-15
+- PR #8: Automate version bumps on merge
+
 ## 1.5.0 - 2026-01-15
 - Add `serverName` to all log entries for easier multi-server tracing.
 - Warn when `payloadMaxChars` is set but payload logging is disabled.
