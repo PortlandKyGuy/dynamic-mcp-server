@@ -1,6 +1,6 @@
 {
   "name": "dynamic-mcp-server",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "description": "A versatile server for the Model Context Protocol (MCP) that dynamically configures tools from a JSON file.",
   "bin": {
     "dynamic-mcp-server": "src/main.js"

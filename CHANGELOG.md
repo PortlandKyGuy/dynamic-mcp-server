@@ -2,6 +2,9 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.5.3 - 2026-02-19
+- PR #9: Fix npm audit vulnerabilities
+
 ## 1.5.1 - 2026-01-15
 - PR #8: Automate version bumps on merge
 
