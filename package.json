@@ -20,13 +20,15 @@
   "license": "MIT",
   "preferGlobal": true,
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.25.2",
+    "@modelcontextprotocol/sdk": "^1.26.0",
     "execa": "^5.1.1",
-    "glob": "^13.0.0",
-    "zod": "^4.2.1"
+    "glob": "^13.0.3",
+    "zod": "^4.3.6"
   },
   "overrides": {
-    "glob": "^13.0.0"
+    "glob": "^13.0.3",
+    "test-exclude": "^7.0.1",
+    "minimatch": "^10.2.2"
   },
   "devDependencies": {
     "@babel/core": "^7.28.5",
